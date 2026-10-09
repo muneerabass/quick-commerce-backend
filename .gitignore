@@ -1,0 +1,20 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Go build artifacts
+/bin/
+*.exe
+*.exe~
+*.test
+*.out
+
+# Dependencies
+/vendor/
+
+# OS and editor files
+.DS_Store
+.vscode/
+.idea/
+
