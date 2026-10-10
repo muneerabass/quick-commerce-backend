@@ -57,6 +57,28 @@ type AuthService struct {
 	resendAfter time.Duration
 	refreshTTL  time.Duration
 	maxAttempts int
+	adminPhone  string
+}
+
+func (s *AuthService) SetAdminPhone(phone string) error {
+	if strings.TrimSpace(phone) == "" {
+		s.adminPhone = ""
+		return nil
+	}
+	normalized, err := NormalizePhone(phone)
+	if err != nil {
+		return err
+	}
+	s.adminPhone = normalized
+	return nil
+}
+
+func (s *AuthService) UserRole(userID uuid.UUID) (string, error) {
+	user, err := s.users.FindByID(nil, userID)
+	if err != nil {
+		return "", err
+	}
+	return user.Role, nil
 }
 
 func NewAuthService(db *gorm.DB, users repository.UserRepository, otps repository.OTPRepository, sessions repository.SessionRepository, sender OTPSender, jwtSecret, otpSecret string, accessTTL, refreshTTL, otpTTL, resendAfter time.Duration, maxAttempts int) *AuthService {
@@ -164,13 +186,20 @@ func (s *AuthService) VerifyOTP(ctx context.Context, rawPhone, otp string) (dto.
 		}
 		user, err = s.users.FindByPhone(tx, phone)
 		if errors.Is(err, repository.ErrNotFound) {
-			user = &domain.User{ID: uuid.New(), Phone: phone, Status: "active", PhoneVerifiedAt: &now, CreatedAt: now, UpdatedAt: now}
+			role := "customer"
+			if phone == s.adminPhone {
+				role = "admin"
+			}
+			user = &domain.User{ID: uuid.New(), Phone: phone, Role: role, Status: "active", PhoneVerifiedAt: &now, CreatedAt: now, UpdatedAt: now}
 			if err := s.users.Create(tx, user); err != nil {
 				return err
 			}
 		} else if err != nil {
 			return err
 		} else {
+			if phone == s.adminPhone && user.Role != "admin" {
+				user.Role = "admin"
+			}
 			user.PhoneVerifiedAt = &now
 			user.UpdatedAt = now
 			if err := s.users.Update(tx, user); err != nil {
@@ -322,7 +351,7 @@ func randomToken(size int) (string, error) {
 }
 
 func userResponse(user *domain.User) dto.UserResponseDto {
-	response := dto.UserResponseDto{ID: user.ID.String(), Phone: user.Phone, Name: user.Name, Status: user.Status}
+	response := dto.UserResponseDto{ID: user.ID.String(), Phone: user.Phone, Name: user.Name, Status: user.Status, Role: user.Role}
 	if user.PhoneVerifiedAt != nil {
 		value := user.PhoneVerifiedAt.UTC().Format(time.RFC3339)
 		response.PhoneVerifiedAt = &value

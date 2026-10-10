@@ -27,6 +27,9 @@ func SetupUserRoutes(rh *rest.RestHandler, cfg configs.AppConfig) {
 		sender = services.NewTwoFactorSender(cfg.TwoFactorBaseURL, cfg.TwoFactorAPIKey, cfg.TwoFactorTemplate)
 	}
 	auth := services.NewAuthService(rh.Db, users, repository.NewOTPRepository(rh.Db), repository.NewSessionRepository(rh.Db), sender, cfg.JWTSecret, cfg.OTPHashSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL, cfg.OTPTTL, cfg.OTPResendAfter, cfg.OTPMaxAttempts)
+	if cfg.AdminPhone != "" {
+		_ = auth.SetAdminPhone(cfg.AdminPhone)
+	}
 	h := UserHandler{auth: auth, address: services.NewAddressService(rh.Db, users, repository.NewAddressRepository(rh.Db))}
 
 	api := rh.App.Group("/api/v1")
@@ -47,6 +50,9 @@ func SetupUserRoutes(rh *rest.RestHandler, cfg configs.AppConfig) {
 	protected.Patch("/addresses/:addressID", h.UpdateAddress)
 	protected.Delete("/addresses/:addressID", h.DeleteAddress)
 	protected.Put("/addresses/:addressID/default", h.SetDefaultAddress)
+
+	SetupCatalogRoutes(rh, auth)
+	SetupCommerceRoutes(rh, auth)
 }
 
 func authTokenService(auth *services.AuthService) *services.TokenService {
@@ -242,8 +248,10 @@ func requestIDs(c *fiber.Ctx) (uuid.UUID, uuid.UUID, error) {
 
 func serviceError(c *fiber.Ctx, err error) error {
 	switch {
-	case errors.Is(err, services.ErrInvalidInput), errors.Is(err, services.ErrInvalidPhone), errors.Is(err, services.ErrInvalidOTP), errors.Is(err, services.ErrOTPExpired), errors.Is(err, services.ErrOTPAttemptsExceeded), errors.Is(err, services.ErrInvalidRefreshToken), errors.Is(err, services.ErrSessionRevoked), errors.Is(err, repository.ErrNotFound):
+	case errors.Is(err, services.ErrInvalidInput), errors.Is(err, services.ErrInvalidPhone), errors.Is(err, services.ErrInvalidOTP), errors.Is(err, services.ErrOTPExpired), errors.Is(err, services.ErrOTPAttemptsExceeded), errors.Is(err, services.ErrInvalidRefreshToken), errors.Is(err, services.ErrSessionRevoked), errors.Is(err, services.ErrCartStoreMismatch), errors.Is(err, services.ErrEmptyCart), errors.Is(err, services.ErrInsufficientStock), errors.Is(err, services.ErrInvalidRole), errors.Is(err, repository.ErrNotFound):
 		return writeError(c, fiber.StatusBadRequest, err.Error())
+	case errors.Is(err, repository.ErrOrderUnavailable), errors.Is(err, gorm.ErrDuplicatedKey):
+		return writeError(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrOTPTooSoon), errors.Is(err, services.ErrOTPRateLimited):
 		return writeError(c, fiber.StatusTooManyRequests, err.Error())
 	case errors.Is(err, services.ErrOTPProvider):

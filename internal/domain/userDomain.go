@@ -12,6 +12,7 @@ type User struct {
 	Name            *string    `json:"name,omitempty"`
 	PhoneVerifiedAt *time.Time `json:"phone_verified_at,omitempty"`
 	Status          string     `json:"status"`
+	Role            string     `json:"role"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 }

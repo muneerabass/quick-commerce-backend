@@ -22,6 +22,7 @@ type AppConfig struct {
 	TwoFactorAPIKey   string
 	TwoFactorTemplate string
 	TwoFactorBaseURL  string
+	AdminPhone        string
 }
 
 func LoadSettings() (AppConfig, error) {
@@ -59,6 +60,7 @@ func LoadSettings() (AppConfig, error) {
 		TwoFactorAPIKey:   os.Getenv("TWO_FACTOR_API_KEY"),
 		TwoFactorTemplate: envOrDefault("TWO_FACTOR_TEMPLATE", "OTP1"),
 		TwoFactorBaseURL:  envOrDefault("TWO_FACTOR_BASE_URL", "https://2factor.in"),
+		AdminPhone:        os.Getenv("ADMIN_PHONE"),
 	}
 	return cfg, nil
 }

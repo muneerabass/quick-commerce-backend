@@ -40,3 +40,22 @@ func UserID(c *fiber.Ctx) (uuid.UUID, bool) {
 	id, ok := c.Locals(UserIDLocal).(uuid.UUID)
 	return id, ok && id != uuid.Nil
 }
+
+func RequireRole(lookup func(uuid.UUID) (string, error), allowed ...string) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		userID, ok := UserID(c)
+		if !ok {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "authentication required"})
+		}
+		role, err := lookup(userID)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "authentication required"})
+		}
+		for _, candidate := range allowed {
+			if role == candidate {
+				return c.Next()
+			}
+		}
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "insufficient permissions"})
+	}
+}
