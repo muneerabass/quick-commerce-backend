@@ -30,7 +30,12 @@ func SetupUserRoutes(rh *rest.RestHandler, cfg configs.AppConfig) {
 	if cfg.AdminPhone != "" {
 		_ = auth.SetAdminPhone(cfg.AdminPhone)
 	}
-	h := UserHandler{auth: auth, address: services.NewAddressService(rh.Db, users, repository.NewAddressRepository(rh.Db))}
+	addressRepository := repository.NewAddressRepository(rh.Db)
+	addressService := services.NewAddressService(rh.Db, users, addressRepository)
+	if cfg.GoogleMapsAPIKey != "" {
+		addressService = services.NewAddressServiceWithGeocoder(rh.Db, users, addressRepository, services.NewGoogleMapsGeocoder(cfg.GoogleMapsBaseURL, cfg.GoogleMapsAPIKey))
+	}
+	h := UserHandler{auth: auth, address: addressService}
 
 	api := rh.App.Group("/api/v1")
 	authRoutes := api.Group("/auth")
@@ -46,6 +51,7 @@ func SetupUserRoutes(rh *rest.RestHandler, cfg configs.AppConfig) {
 	protected.Delete("/", h.DeleteAccount)
 	protected.Post("/addresses", h.CreateAddress)
 	protected.Get("/addresses", h.ListAddresses)
+	protected.Post("/addresses/geocode", h.GeocodeAddress)
 	protected.Get("/addresses/:addressID", h.GetAddress)
 	protected.Patch("/addresses/:addressID", h.UpdateAddress)
 	protected.Delete("/addresses/:addressID", h.DeleteAddress)
@@ -195,6 +201,18 @@ func (h *UserHandler) CreateAddress(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(address)
 }
 
+func (h *UserHandler) GeocodeAddress(c *fiber.Ctx) error {
+	var request dto.GeocodeRequest
+	if err := c.BodyParser(&request); err != nil {
+		return writeError(c, fiber.StatusBadRequest, "invalid request body")
+	}
+	response, err := h.address.Geocode(request.Address)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(response)
+}
+
 func (h *UserHandler) UpdateAddress(c *fiber.Ctx) error {
 	userID, addressID, err := requestIDs(c)
 	if err != nil {
@@ -254,6 +272,10 @@ func serviceError(c *fiber.Ctx, err error) error {
 		return writeError(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrOTPTooSoon), errors.Is(err, services.ErrOTPRateLimited):
 		return writeError(c, fiber.StatusTooManyRequests, err.Error())
+	case errors.Is(err, services.ErrAddressNotFound):
+		return writeError(c, fiber.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, services.ErrGoogleMapsNotConfigured), errors.Is(err, services.ErrGoogleMaps):
+		return writeError(c, fiber.StatusServiceUnavailable, "Google Maps geocoding is unavailable")
 	case errors.Is(err, services.ErrOTPProvider):
 		return writeError(c, fiber.StatusServiceUnavailable, "OTP provider is not configured")
 	case errors.Is(err, gorm.ErrRecordNotFound):

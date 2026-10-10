@@ -52,3 +52,7 @@ type AddressPatchRequest struct {
 	DeliveryInstructions *string  `json:"delivery_instructions"`
 	IsDefault            *bool    `json:"is_default"`
 }
+
+type GeocodeRequest struct {
+	Address string `json:"address"`
+}

@@ -20,3 +20,9 @@ type AddressResponse struct {
 	CreatedAt            time.Time `json:"created_at"`
 	UpdatedAt            time.Time `json:"updated_at"`
 }
+
+type GeocodeResponse struct {
+	FormattedAddress string  `json:"formatted_address"`
+	Latitude         float64 `json:"latitude"`
+	Longitude        float64 `json:"longitude"`
+}

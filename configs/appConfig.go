@@ -23,6 +23,8 @@ type AppConfig struct {
 	TwoFactorTemplate string
 	TwoFactorBaseURL  string
 	AdminPhone        string
+	GoogleMapsAPIKey  string
+	GoogleMapsBaseURL string
 }
 
 func LoadSettings() (AppConfig, error) {
@@ -61,6 +63,8 @@ func LoadSettings() (AppConfig, error) {
 		TwoFactorTemplate: envOrDefault("TWO_FACTOR_TEMPLATE", "OTP1"),
 		TwoFactorBaseURL:  envOrDefault("TWO_FACTOR_BASE_URL", "https://2factor.in"),
 		AdminPhone:        os.Getenv("ADMIN_PHONE"),
+		GoogleMapsAPIKey:  os.Getenv("GOOGLE_MAPS_API_KEY"),
+		GoogleMapsBaseURL: envOrDefault("GOOGLE_MAPS_BASE_URL", "https://maps.googleapis.com"),
 	}
 	return cfg, nil
 }

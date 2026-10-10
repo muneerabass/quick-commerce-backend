@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -17,13 +18,33 @@ import (
 var pincodePattern = regexp.MustCompile(`^[0-9]{4,10}$`)
 
 type AddressService struct {
-	db    *gorm.DB
-	users repository.UserRepository
-	addrs repository.AddressRepository
+	db       *gorm.DB
+	users    repository.UserRepository
+	addrs    repository.AddressRepository
+	geocoder Geocoder
 }
 
 func NewAddressService(db *gorm.DB, users repository.UserRepository, addrs repository.AddressRepository) *AddressService {
 	return &AddressService{db: db, users: users, addrs: addrs}
+}
+
+func NewAddressServiceWithGeocoder(db *gorm.DB, users repository.UserRepository, addrs repository.AddressRepository, geocoder Geocoder) *AddressService {
+	return &AddressService{db: db, users: users, addrs: addrs, geocoder: geocoder}
+}
+
+func (s *AddressService) Geocode(address string) (dto.GeocodeResponse, error) {
+	address = strings.TrimSpace(address)
+	if address == "" || len(address) > 500 {
+		return dto.GeocodeResponse{}, fmt.Errorf("%w: address must be between 1 and 500 characters", ErrInvalidInput)
+	}
+	if s.geocoder == nil {
+		return dto.GeocodeResponse{}, ErrGoogleMapsNotConfigured
+	}
+	result, err := s.geocoder.Geocode(context.Background(), address)
+	if err != nil {
+		return dto.GeocodeResponse{}, err
+	}
+	return dto.GeocodeResponse{FormattedAddress: result.FormattedAddress, Latitude: result.Latitude, Longitude: result.Longitude}, nil
 }
 
 func (s *AddressService) List(userID uuid.UUID) ([]dto.AddressResponse, error) {
@@ -45,6 +66,9 @@ func (s *AddressService) Get(userID, addressID uuid.UUID) (dto.AddressResponse, 
 func (s *AddressService) Create(userID uuid.UUID, request dto.AddressRequest) (dto.AddressResponse, error) {
 	address, err := addressFromRequest(userID, request)
 	if err != nil {
+		return dto.AddressResponse{}, err
+	}
+	if err := s.resolveCoordinates(address); err != nil {
 		return dto.AddressResponse{}, err
 	}
 	err = s.db.Transaction(func(tx *gorm.DB) error {
@@ -83,6 +107,9 @@ func (s *AddressService) Update(userID, addressID uuid.UUID, request dto.Address
 		if err := applyAddressPatch(address, request); err != nil {
 			return err
 		}
+		if err := s.resolveCoordinates(address); err != nil {
+			return err
+		}
 		if request.IsDefault != nil && *request.IsDefault {
 			if err := s.addrs.ClearDefaults(tx, userID); err != nil {
 				return err
@@ -101,6 +128,23 @@ func (s *AddressService) Update(userID, addressID uuid.UUID, request dto.Address
 		return dto.AddressResponse{}, err
 	}
 	return mapAddress(updated), nil
+}
+
+func (s *AddressService) resolveCoordinates(address *domain.UserAddress) error {
+	if address.Latitude != nil && address.Longitude != nil {
+		return nil
+	}
+	if s.geocoder == nil {
+		return nil
+	}
+	query := strings.Join([]string{address.AddressLine1, address.City, address.State, address.Pincode}, ", ")
+	result, err := s.geocoder.Geocode(context.Background(), query)
+	if err != nil {
+		return err
+	}
+	address.Latitude = &result.Latitude
+	address.Longitude = &result.Longitude
+	return nil
 }
 
 func (s *AddressService) Delete(userID, addressID uuid.UUID) error {
@@ -178,6 +222,7 @@ func addressFromRequest(userID uuid.UUID, request dto.AddressRequest) (*domain.U
 }
 
 func applyAddressPatch(address *domain.UserAddress, request dto.AddressPatchRequest) error {
+	locationChanged := false
 	if request.Label != nil {
 		address.Label = strings.TrimSpace(*request.Label)
 	}
@@ -193,6 +238,7 @@ func applyAddressPatch(address *domain.UserAddress, request dto.AddressPatchRequ
 	}
 	if request.AddressLine1 != nil {
 		address.AddressLine1 = strings.TrimSpace(*request.AddressLine1)
+		locationChanged = true
 	}
 	if request.AddressLine2 != nil {
 		address.AddressLine2 = trimOptional(request.AddressLine2)
@@ -202,18 +248,25 @@ func applyAddressPatch(address *domain.UserAddress, request dto.AddressPatchRequ
 	}
 	if request.City != nil {
 		address.City = strings.TrimSpace(*request.City)
+		locationChanged = true
 	}
 	if request.State != nil {
 		address.State = strings.TrimSpace(*request.State)
+		locationChanged = true
 	}
 	if request.Pincode != nil {
 		address.Pincode = strings.TrimSpace(*request.Pincode)
+		locationChanged = true
 	}
 	if request.Latitude != nil {
 		address.Latitude = request.Latitude
 	}
 	if request.Longitude != nil {
 		address.Longitude = request.Longitude
+	}
+	if locationChanged && request.Latitude == nil && request.Longitude == nil {
+		address.Latitude = nil
+		address.Longitude = nil
 	}
 	if request.DeliveryInstructions != nil {
 		address.DeliveryInstructions = trimOptional(request.DeliveryInstructions)
