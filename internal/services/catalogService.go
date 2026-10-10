@@ -67,7 +67,7 @@ func (s *CatalogService) Nearby(latitude, longitude, radiusKM float64) ([]dto.Ne
 			}
 			mappedProducts = append(mappedProducts, dto.CatalogProductResponse{
 				ID: product.ID.String(), Name: product.Name, Description: product.Description,
-				Price: product.Price, CategoryID: categoryID, Quantity: product.Quantity,
+				Price: product.Price, ImageURL: product.ImageURL, CategoryID: categoryID, Quantity: product.Quantity,
 			})
 		}
 		response = append(response, dto.NearbyStoreResponse{
@@ -88,6 +88,41 @@ type AdminService struct {
 
 func NewAdminService(db *gorm.DB, users repository.UserRepository, catalog repository.CatalogRepository, commerce repository.CommerceRepository) *AdminService {
 	return &AdminService{db: db, users: users, catalog: catalog, commerce: commerce}
+}
+
+func (s *AdminService) ListStores() ([]dto.StoreResponse, error) {
+	stores, err := s.catalog.ListAllStores(nil)
+	if err != nil {
+		return nil, err
+	}
+	response := make([]dto.StoreResponse, 0, len(stores))
+	for i := range stores {
+		response = append(response, mapStore(&stores[i], 0))
+	}
+	return response, nil
+}
+
+func (s *AdminService) ListProducts() ([]dto.CatalogProductResponse, error) {
+	products, err := s.catalog.ListAllProducts(nil)
+	if err != nil {
+		return nil, err
+	}
+	response := make([]dto.CatalogProductResponse, 0, len(products))
+	for i := range products {
+		response = append(response, mapProduct(&products[i], 0))
+	}
+	return response, nil
+}
+
+func (s *AdminService) ListInventory(storeID uuid.UUID) ([]domain.Inventory, error) {
+	if _, err := s.catalog.FindStore(nil, storeID); err != nil {
+		return nil, err
+	}
+	return s.catalog.ListInventoryForStore(nil, storeID)
+}
+
+func (s *AdminService) ListCategories() ([]domain.Category, error) {
+	return s.catalog.ListCategories(nil)
 }
 
 func (s *AdminService) CreateStore(request dto.StoreRequest) (dto.StoreResponse, error) {
@@ -166,7 +201,7 @@ func (s *AdminService) CreateProduct(request dto.ProductRequest) (dto.CatalogPro
 	if err != nil {
 		return dto.CatalogProductResponse{}, err
 	}
-	product := &domain.Product{ID: uuid.New(), Name: name, Description: trimOptional(request.Description), Price: request.Price, CategoryID: categoryID, CreatedAt: time.Now().UTC()}
+	product := &domain.Product{ID: uuid.New(), Name: name, Description: trimOptional(request.Description), Price: request.Price, ImageURL: trimOptional(request.ImageURL), CategoryID: categoryID, CreatedAt: time.Now().UTC()}
 	if err := s.catalog.CreateProduct(nil, product); err != nil {
 		return dto.CatalogProductResponse{}, err
 	}
@@ -198,6 +233,9 @@ func (s *AdminService) UpdateProduct(id uuid.UUID, request dto.ProductPatchReque
 		if err != nil {
 			return dto.CatalogProductResponse{}, err
 		}
+	}
+	if request.ImageURL != nil {
+		product.ImageURL = trimOptional(request.ImageURL)
 	}
 	if err := s.catalog.UpdateProduct(nil, product); err != nil {
 		return dto.CatalogProductResponse{}, err
@@ -295,7 +333,7 @@ func mapProduct(product *domain.Product, quantity int) dto.CatalogProductRespons
 		value := product.CategoryID.String()
 		categoryID = &value
 	}
-	return dto.CatalogProductResponse{ID: product.ID.String(), Name: product.Name, Description: product.Description, Price: product.Price, CategoryID: categoryID, Quantity: quantity}
+	return dto.CatalogProductResponse{ID: product.ID.String(), Name: product.Name, Description: product.Description, Price: product.Price, ImageURL: product.ImageURL, CategoryID: categoryID, Quantity: quantity}
 }
 
 func validateCoordinates(latitude, longitude float64) error {

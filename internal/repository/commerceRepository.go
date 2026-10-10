@@ -13,6 +13,10 @@ import (
 
 type CatalogRepository interface {
 	ListActiveStores(db *gorm.DB) ([]domain.Store, error)
+	ListAllStores(db *gorm.DB) ([]domain.Store, error)
+	ListAllProducts(db *gorm.DB) ([]domain.Product, error)
+	ListInventoryForStore(db *gorm.DB, storeID uuid.UUID) ([]domain.Inventory, error)
+	ListCategories(db *gorm.DB) ([]domain.Category, error)
 	FindStore(db *gorm.DB, id uuid.UUID) (*domain.Store, error)
 	CreateStore(db *gorm.DB, store *domain.Store) error
 	UpdateStore(db *gorm.DB, store *domain.Store) error
@@ -33,6 +37,30 @@ func (r *catalogRepository) ListActiveStores(db *gorm.DB) ([]domain.Store, error
 	var stores []domain.Store
 	err := dbOrDefault(db, r.db).Where("is_active = ?", true).Order("created_at ASC").Find(&stores).Error
 	return stores, err
+}
+
+func (r *catalogRepository) ListAllStores(db *gorm.DB) ([]domain.Store, error) {
+	var stores []domain.Store
+	err := dbOrDefault(db, r.db).Order("created_at ASC").Find(&stores).Error
+	return stores, err
+}
+
+func (r *catalogRepository) ListAllProducts(db *gorm.DB) ([]domain.Product, error) {
+	var products []domain.Product
+	err := dbOrDefault(db, r.db).Order("name ASC").Find(&products).Error
+	return products, err
+}
+
+func (r *catalogRepository) ListInventoryForStore(db *gorm.DB, storeID uuid.UUID) ([]domain.Inventory, error) {
+	var rows []domain.Inventory
+	err := dbOrDefault(db, r.db).Where("store_id = ?", storeID).Find(&rows).Error
+	return rows, err
+}
+
+func (r *catalogRepository) ListCategories(db *gorm.DB) ([]domain.Category, error) {
+	var rows []domain.Category
+	err := dbOrDefault(db, r.db).Order("name ASC").Find(&rows).Error
+	return rows, err
 }
 
 func (r *catalogRepository) FindStore(db *gorm.DB, id uuid.UUID) (*domain.Store, error) {
@@ -76,14 +104,14 @@ func (r *catalogRepository) CreateProduct(db *gorm.DB, product *domain.Product) 
 
 func (r *catalogRepository) UpdateProduct(db *gorm.DB, product *domain.Product) error {
 	return dbOrDefault(db, r.db).Model(&domain.Product{}).Where("id = ?", product.ID).Updates(map[string]any{
-		"name": product.Name, "description": product.Description, "price": product.Price, "category_id": product.CategoryID,
+		"name": product.Name, "description": product.Description, "price": product.Price, "image_url": product.ImageURL, "category_id": product.CategoryID,
 	}).Error
 }
 
 func (r *catalogRepository) ListProductsForStore(db *gorm.DB, storeID uuid.UUID) ([]domain.ProductInventory, error) {
 	var rows []domain.ProductInventory
 	err := dbOrDefault(db, r.db).Table("products").Select(
-		"products.id, products.name, products.description, products.price, products.category_id, products.created_at, inventory.quantity",
+		"products.id, products.name, products.description, products.price, products.image_url, products.category_id, products.created_at, inventory.quantity",
 	).Joins("JOIN inventory ON inventory.product_id = products.id AND inventory.store_id = ? AND inventory.quantity > 0", storeID).
 		Order("products.name ASC").Scan(&rows).Error
 	return rows, err

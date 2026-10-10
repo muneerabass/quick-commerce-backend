@@ -1,3 +1,44 @@
+-- Catalog tables (created first so FKs below resolve on a fresh database).
+CREATE TABLE IF NOT EXISTS public.categories (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.stores (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name text NOT NULL,
+    address text NOT NULL,
+    latitude double precision,
+    longitude double precision,
+    is_active boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (latitude IS NULL OR latitude BETWEEN -90 AND 90),
+    CHECK (longitude IS NULL OR longitude BETWEEN -180 AND 180)
+);
+
+CREATE TABLE IF NOT EXISTS public.products (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name text NOT NULL,
+    description text,
+    price integer NOT NULL CHECK (price >= 0),
+    image_url text,
+    category_id uuid REFERENCES public.categories(id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.inventory (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    store_id uuid NOT NULL REFERENCES public.stores(id) ON DELETE CASCADE,
+    product_id uuid NOT NULL REFERENCES public.products(id) ON DELETE CASCADE,
+    quantity integer NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (store_id, product_id)
+);
+
+CREATE INDEX IF NOT EXISTS inventory_store_idx ON public.inventory (store_id);
+CREATE INDEX IF NOT EXISTS inventory_product_idx ON public.inventory (product_id);
+
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS role text;
 
 DO $$

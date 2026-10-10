@@ -9,9 +9,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"quick-commerce/internal/domain"
@@ -45,6 +47,16 @@ type UnconfiguredOTPSender struct{}
 
 func (UnconfiguredOTPSender) Send(context.Context, string, string) error { return ErrOTPProvider }
 
+// DevStdoutOTPSender is a dev-only sender that only logs the OTP to stdout and
+// never returns an error. It is wired in SetupUserRoutes when DEV_OTP_LOG is true
+// so that local development does not require a real OTP provider.
+type DevStdoutOTPSender struct{}
+
+func (DevStdoutOTPSender) Send(_ context.Context, phone, otp string) error {
+	log.Printf("[DEV OTP] phone=%s otp=%s", phone, otp)
+	return nil
+}
+
 type AuthService struct {
 	db          *gorm.DB
 	users       repository.UserRepository
@@ -58,6 +70,28 @@ type AuthService struct {
 	refreshTTL  time.Duration
 	maxAttempts int
 	adminPhone  string
+	devOTPLog   bool
+	lastOTPs    sync.Map // phone -> string (last plaintext OTP, dev only)
+}
+
+func (s *AuthService) SetDevOTPLog(enabled bool) { s.devOTPLog = enabled }
+
+// LastDevOTP returns the most recent plaintext OTP generated for a phone, when
+// dev-OTP logging is on. Returns ("", false) if there isn't one or the feature
+// is disabled.
+func (s *AuthService) LastDevOTP(rawPhone string) (string, bool) {
+	if !s.devOTPLog {
+		return "", false
+	}
+	phone, err := NormalizePhone(rawPhone)
+	if err != nil {
+		return "", false
+	}
+	value, ok := s.lastOTPs.Load(phone)
+	if !ok {
+		return "", false
+	}
+	return value.(string), true
 }
 
 func (s *AuthService) SetAdminPhone(phone string) error {
@@ -130,6 +164,9 @@ func (s *AuthService) SendOTP(ctx context.Context, rawPhone string) error {
 		}
 		if err := s.sender.Send(ctx, phone, otp); err != nil {
 			return err
+		}
+		if s.devOTPLog {
+			s.lastOTPs.Store(phone, otp)
 		}
 		return s.otps.Create(tx, &domain.OTPVerification{
 			Phone: phone, OTPHash: s.hashOTP(phone, otp),

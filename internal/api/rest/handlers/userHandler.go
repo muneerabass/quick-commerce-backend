@@ -26,7 +26,13 @@ func SetupUserRoutes(rh *rest.RestHandler, cfg configs.AppConfig) {
 	if cfg.TwoFactorAPIKey != "" {
 		sender = services.NewTwoFactorSender(cfg.TwoFactorBaseURL, cfg.TwoFactorAPIKey, cfg.TwoFactorTemplate)
 	}
+	// Dev-mode swap: when DEV_OTP_LOG is on, OTP delivery is a noop stdout log so
+	// a developer can log in without a real SMS provider.
+	if cfg.DevOTPLog {
+		sender = services.DevStdoutOTPSender{}
+	}
 	auth := services.NewAuthService(rh.Db, users, repository.NewOTPRepository(rh.Db), repository.NewSessionRepository(rh.Db), sender, cfg.JWTSecret, cfg.OTPHashSecret, cfg.AccessTokenTTL, cfg.RefreshTokenTTL, cfg.OTPTTL, cfg.OTPResendAfter, cfg.OTPMaxAttempts)
+	auth.SetDevOTPLog(cfg.DevOTPLog)
 	if cfg.AdminPhone != "" {
 		_ = auth.SetAdminPhone(cfg.AdminPhone)
 	}
@@ -44,6 +50,9 @@ func SetupUserRoutes(rh *rest.RestHandler, cfg configs.AppConfig) {
 	authRoutes.Post("/refresh", h.Refresh)
 	authRoutes.Post("/logout", h.Logout)
 	authRoutes.Post("/logout-all", middleware.RequireAuth(authTokenService(h.auth), h.auth.ValidateAccessSession), h.LogoutAll)
+	if cfg.DevOTPLog {
+		authRoutes.Get("/dev/last-otp", h.LastDevOTP)
+	}
 
 	protected := api.Group("/users/me", middleware.RequireAuth(authTokenService(h.auth), h.auth.ValidateAccessSession))
 	protected.Get("/", h.GetMe)
@@ -59,6 +68,7 @@ func SetupUserRoutes(rh *rest.RestHandler, cfg configs.AppConfig) {
 
 	SetupCatalogRoutes(rh, auth)
 	SetupCommerceRoutes(rh, auth)
+	SetupUploadsRoutes(rh, cfg, auth)
 }
 
 func authTokenService(auth *services.AuthService) *services.TokenService {
@@ -109,6 +119,18 @@ func (h *UserHandler) Logout(c *fiber.Ctx) error {
 		return serviceError(c, err)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *UserHandler) LastDevOTP(c *fiber.Ctx) error {
+	phone := c.Query("phone")
+	if phone == "" {
+		return writeError(c, fiber.StatusBadRequest, "phone is required")
+	}
+	otp, ok := h.auth.LastDevOTP(phone)
+	if !ok {
+		return writeError(c, fiber.StatusNotFound, "no OTP generated yet for this phone")
+	}
+	return c.JSON(fiber.Map{"otp": otp})
 }
 
 func (h *UserHandler) LogoutAll(c *fiber.Ctx) error {

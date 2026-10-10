@@ -17,6 +17,7 @@ type CatalogProductResponse struct {
 	Name        string  `json:"name"`
 	Description *string `json:"description,omitempty"`
 	Price       int     `json:"price"`
+	ImageURL    *string `json:"image_url,omitempty"`
 	CategoryID  *string `json:"category_id,omitempty"`
 	Quantity    int     `json:"quantity"`
 }

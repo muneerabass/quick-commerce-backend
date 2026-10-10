@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -25,6 +26,10 @@ type AppConfig struct {
 	AdminPhone        string
 	GoogleMapsAPIKey  string
 	GoogleMapsBaseURL string
+	DevOTPLog         bool
+	CloudinaryCloudName string
+	CloudinaryAPIKey    string
+	CloudinaryAPISecret string
 }
 
 func LoadSettings() (AppConfig, error) {
@@ -65,8 +70,24 @@ func LoadSettings() (AppConfig, error) {
 		AdminPhone:        os.Getenv("ADMIN_PHONE"),
 		GoogleMapsAPIKey:  envOrDefault("GOOGLE_MAPS_PLATFORM_KEY", os.Getenv("GOOGLE_MAPS_API_KEY")),
 		GoogleMapsBaseURL: envOrDefault("GOOGLE_MAPS_BASE_URL", "https://maps.googleapis.com"),
+		DevOTPLog:           boolFromEnv("DEV_OTP_LOG", false),
+		CloudinaryCloudName: os.Getenv("CLOUDINARY_CLOUD_NAME"),
+		CloudinaryAPIKey:    os.Getenv("CLOUDINARY_API_KEY"),
+		CloudinaryAPISecret: os.Getenv("CLOUDINARY_API_SECRET"),
 	}
 	return cfg, nil
+}
+
+func boolFromEnv(key string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch value {
+	case "":
+		return fallback
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func envOrDefault(key, fallback string) string {

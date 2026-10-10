@@ -29,14 +29,54 @@ func SetupCatalogRoutes(rh *rest.RestHandler, auth *services.AuthService) {
 
 	authenticated := middleware.RequireAuth(auth.TokenService(), auth.ValidateAccessSession)
 	adminRoutes := api.Group("/admin", authenticated, middleware.RequireRole(auth.UserRole, "admin"))
+	adminRoutes.Get("/stores", h.ListStores)
 	adminRoutes.Post("/stores", h.CreateStore)
 	adminRoutes.Patch("/stores/:storeID", h.UpdateStore)
+	adminRoutes.Get("/products", h.ListProducts)
 	adminRoutes.Post("/products", h.CreateProduct)
 	adminRoutes.Patch("/products/:productID", h.UpdateProduct)
+	adminRoutes.Get("/stores/:storeID/inventory", h.ListInventory)
 	adminRoutes.Put("/stores/:storeID/inventory/:productID", h.SetInventory)
+	adminRoutes.Get("/categories", h.ListCategories)
 	adminRoutes.Post("/delivery-users", h.CreateDeliveryUser)
 	adminRoutes.Put("/delivery-users/:deliveryID/stores/:storeID", h.AssignDeliveryUser)
 	adminRoutes.Delete("/delivery-users/:deliveryID/stores/:storeID", h.RemoveDeliveryAssignment)
+}
+
+func (h *CatalogHandler) ListStores(c *fiber.Ctx) error {
+	stores, err := h.admin.ListStores()
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(fiber.Map{"stores": stores})
+}
+
+func (h *CatalogHandler) ListProducts(c *fiber.Ctx) error {
+	products, err := h.admin.ListProducts()
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(fiber.Map{"products": products})
+}
+
+func (h *CatalogHandler) ListInventory(c *fiber.Ctx) error {
+	storeID, err := parseParamUUID(c, "storeID")
+	if err != nil {
+		return serviceError(c, err)
+	}
+	inventory, err := h.admin.ListInventory(storeID)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(fiber.Map{"inventory": inventory})
+}
+
+func (h *CatalogHandler) ListCategories(c *fiber.Ctx) error {
+	categories, err := h.admin.ListCategories()
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(fiber.Map{"categories": categories})
 }
 
 func (h *CatalogHandler) Nearby(c *fiber.Ctx) error {

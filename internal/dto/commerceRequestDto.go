@@ -20,6 +20,7 @@ type ProductRequest struct {
 	Name        string  `json:"name"`
 	Description *string `json:"description"`
 	Price       int     `json:"price"`
+	ImageURL    *string `json:"image_url"`
 	CategoryID  *string `json:"category_id"`
 }
 
@@ -27,6 +28,7 @@ type ProductPatchRequest struct {
 	Name        *string `json:"name"`
 	Description *string `json:"description"`
 	Price       *int    `json:"price"`
+	ImageURL    *string `json:"image_url"`
 	CategoryID  *string `json:"category_id"`
 }
 

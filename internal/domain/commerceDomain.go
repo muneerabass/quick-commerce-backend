@@ -27,6 +27,7 @@ type Product struct {
 	Name        string     `json:"name"`
 	Description *string    `json:"description,omitempty"`
 	Price       int        `json:"price"`
+	ImageURL    *string    `json:"image_url,omitempty"`
 	CategoryID  *uuid.UUID `json:"category_id,omitempty" gorm:"type:uuid"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
@@ -36,6 +37,7 @@ type ProductInventory struct {
 	Name        string     `json:"name"`
 	Description *string    `json:"description,omitempty"`
 	Price       int        `json:"price"`
+	ImageURL    *string    `json:"image_url,omitempty"`
 	CategoryID  *uuid.UUID `json:"category_id,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	Quantity    int        `json:"quantity"`
