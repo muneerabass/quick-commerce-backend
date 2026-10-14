@@ -169,3 +169,61 @@ func TestCartCannotMixStoresAndOrderAcceptIsSingleWinner(t *testing.T) {
 		t.Fatalf("expected second acceptance to fail, got %v", err)
 	}
 }
+
+func TestRiderCanHoldOnlyOneActiveOrder(t *testing.T) {
+	db := commerceTestDB(t)
+	now := time.Now().UTC()
+	userID := uuid.New()
+	riderID := uuid.New()
+	storeID := uuid.New()
+	for _, user := range []*domain.User{
+		{ID: userID, Phone: "+919876543240", Role: "customer", Status: "active", CreatedAt: now, UpdatedAt: now},
+		{ID: riderID, Phone: "+919876543241", Role: "delivery", Status: "active", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := db.Create(user).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	lat, lon := 12.9, 77.6
+	if err := db.Create(&domain.Store{ID: storeID, Name: "One", Address: "A", Latitude: &lat, Longitude: &lon, IsActive: true, CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	commerceRepo := repository.NewCommerceRepository(db)
+	catalogRepo := repository.NewCatalogRepository(db)
+	orderService := NewOrderService(db, repository.NewAddressRepository(db), catalogRepo, commerceRepo)
+	if err := commerceRepo.CreateAssignment(nil, &domain.DeliveryStoreAssignment{ID: uuid.New(), DeliveryID: riderID, StoreID: storeID, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	// Two independent pending orders at the rider's store.
+	orderA := uuid.New()
+	orderB := uuid.New()
+	for _, id := range []uuid.UUID{orderA, orderB} {
+		o := &domain.Order{ID: id, UserID: userID, StoreID: storeID, Status: "pending", PaymentMethod: "cod", PaymentStatus: "pending", TotalAmount: 100, RecipientName: "C", DeliveryPhone: "+919876543240", AddressLine1: "1 Main", City: "BLR", State: "KA", Pincode: "560001", CreatedAt: now, UpdatedAt: now}
+		if err := db.Create(o).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := orderService.Accept(riderID, orderA); err != nil {
+		t.Fatalf("first accept should succeed: %v", err)
+	}
+	// Second accept while A is still active must be refused.
+	if _, err := orderService.Accept(riderID, orderB); !errors.Is(err, repository.ErrRiderBusy) {
+		t.Fatalf("expected ErrRiderBusy, got %v", err)
+	}
+	// The rider's active list should show exactly order A.
+	active, err := orderService.MineForDelivery(riderID, "accepted")
+	if err != nil || len(active) != 1 || active[0].ID != orderA.String() {
+		t.Fatalf("expected one active order A, got %+v err=%v", active, err)
+	}
+	// After completing A, the rider can accept B.
+	if _, err := orderService.Complete(riderID, orderA); err != nil {
+		t.Fatalf("complete A: %v", err)
+	}
+	if _, err := orderService.Accept(riderID, orderB); err != nil {
+		t.Fatalf("accept B after completing A should succeed: %v", err)
+	}
+	history, err := orderService.MineForDelivery(riderID, "completed")
+	if err != nil || len(history) != 1 || history[0].ID != orderA.String() {
+		t.Fatalf("expected A in completed history, got %+v err=%v", history, err)
+	}
+}

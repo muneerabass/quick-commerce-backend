@@ -52,7 +52,15 @@ func (h *CatalogHandler) ListStores(c *fiber.Ctx) error {
 }
 
 func (h *CatalogHandler) ListProducts(c *fiber.Ctx) error {
-	products, err := h.admin.ListProducts()
+	var storeID *uuid.UUID
+	if value := c.Query("store_id"); value != "" {
+		parsed, err := uuid.Parse(value)
+		if err != nil {
+			return writeError(c, fiber.StatusBadRequest, "invalid store_id")
+		}
+		storeID = &parsed
+	}
+	products, err := h.admin.ListProducts(storeID)
 	if err != nil {
 		return serviceError(c, err)
 	}

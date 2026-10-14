@@ -17,19 +17,24 @@ type StorePatchRequest struct {
 }
 
 type ProductRequest struct {
-	Name        string  `json:"name"`
-	Description *string `json:"description"`
-	Price       int     `json:"price"`
-	ImageURL    *string `json:"image_url"`
-	CategoryID  *string `json:"category_id"`
+	StoreID     string   `json:"store_id"`
+	Name        string   `json:"name"`
+	Description *string  `json:"description"`
+	Price       int      `json:"price"`
+	ImageURL    *string  `json:"image_url"`
+	Images      []string `json:"images"`
+	CategoryID  *string  `json:"category_id"`
+	// Quantity is the initial stock set for this product at its store.
+	Quantity *int `json:"quantity"`
 }
 
 type ProductPatchRequest struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
-	Price       *int    `json:"price"`
-	ImageURL    *string `json:"image_url"`
-	CategoryID  *string `json:"category_id"`
+	Name        *string   `json:"name"`
+	Description *string   `json:"description"`
+	Price       *int      `json:"price"`
+	ImageURL    *string   `json:"image_url"`
+	Images      *[]string `json:"images"`
+	CategoryID  *string   `json:"category_id"`
 }
 
 type InventoryRequest struct {

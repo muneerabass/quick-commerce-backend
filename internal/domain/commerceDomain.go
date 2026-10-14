@@ -24,20 +24,24 @@ type Category struct {
 
 type Product struct {
 	ID          uuid.UUID  `json:"id" gorm:"type:uuid;primaryKey"`
+	StoreID     uuid.UUID  `json:"store_id" gorm:"type:uuid;index"`
 	Name        string     `json:"name"`
 	Description *string    `json:"description,omitempty"`
 	Price       int        `json:"price"`
 	ImageURL    *string    `json:"image_url,omitempty"`
+	Images      []string   `json:"images" gorm:"serializer:json"`
 	CategoryID  *uuid.UUID `json:"category_id,omitempty" gorm:"type:uuid"`
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
 type ProductInventory struct {
 	ID          uuid.UUID  `json:"id"`
+	StoreID     uuid.UUID  `json:"store_id"`
 	Name        string     `json:"name"`
 	Description *string    `json:"description,omitempty"`
 	Price       int        `json:"price"`
 	ImageURL    *string    `json:"image_url,omitempty"`
+	Images      []string   `json:"images" gorm:"serializer:json"`
 	CategoryID  *uuid.UUID `json:"category_id,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	Quantity    int        `json:"quantity"`

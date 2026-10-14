@@ -302,6 +302,41 @@ func (s *OrderService) PendingForDelivery(deliveryID uuid.UUID) ([]dto.OrderResp
 	return s.mapOrders(orders)
 }
 
+// MineForDelivery lists a rider's own orders by status: "accepted" (their active
+// delivery) or "completed" (their delivery history).
+func (s *OrderService) MineForDelivery(deliveryID uuid.UUID, status string) ([]dto.OrderResponse, error) {
+	if status != "accepted" && status != "completed" {
+		return nil, fmt.Errorf("%w: status must be accepted or completed", ErrInvalidInput)
+	}
+	orders, err := s.commerce.ListOrdersForDeliveryBy(nil, deliveryID, status)
+	if err != nil {
+		return nil, err
+	}
+	return s.mapOrders(orders)
+}
+
+// GetForDelivery returns a single order visible to a rider: pending orders at
+// any store they're assigned to, or any order already accepted by this rider.
+func (s *OrderService) GetForDelivery(deliveryID, orderID uuid.UUID) (dto.OrderResponse, error) {
+	order, err := s.findOrder(orderID)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+	if order.AcceptedBy != nil && *order.AcceptedBy == deliveryID {
+		return s.mapOrder(order)
+	}
+	if order.Status == "pending" {
+		assigned, err := s.commerce.IsAssigned(nil, deliveryID, order.StoreID)
+		if err != nil {
+			return dto.OrderResponse{}, err
+		}
+		if assigned {
+			return s.mapOrder(order)
+		}
+	}
+	return dto.OrderResponse{}, repository.ErrNotFound
+}
+
 func (s *OrderService) Accept(deliveryID, orderID uuid.UUID) (dto.OrderResponse, error) {
 	now := time.Now().UTC()
 	if err := s.commerce.AcceptOrder(nil, orderID, deliveryID, now); err != nil {

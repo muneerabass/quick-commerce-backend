@@ -36,8 +36,27 @@ func SetupCommerceRoutes(rh *rest.RestHandler, auth *services.AuthService) {
 
 	delivery := api.Group("/delivery", authenticated, middleware.RequireRole(auth.UserRole, "delivery"))
 	delivery.Get("/orders", h.PendingDeliveryOrders)
+	// Registered before the :orderID param route so "mine" is not swallowed as an ID.
+	delivery.Get("/orders/mine", h.MyDeliveryOrders)
+	delivery.Get("/orders/:orderID", h.GetDeliveryOrder)
 	delivery.Post("/orders/:orderID/accept", h.AcceptOrder)
 	delivery.Post("/orders/:orderID/complete", h.CompleteOrder)
+}
+
+func (h *CommerceHandler) GetDeliveryOrder(c *fiber.Ctx) error {
+	deliveryID, ok := middleware.UserID(c)
+	if !ok {
+		return writeError(c, fiber.StatusUnauthorized, "authentication required")
+	}
+	orderID, err := uuid.Parse(c.Params("orderID"))
+	if err != nil {
+		return serviceError(c, services.ErrInvalidInput)
+	}
+	order, err := h.orders.GetForDelivery(deliveryID, orderID)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(order)
 }
 
 func (h *CommerceHandler) GetCart(c *fiber.Ctx) error {
@@ -169,6 +188,20 @@ func (h *CommerceHandler) PendingDeliveryOrders(c *fiber.Ctx) error {
 		return writeError(c, fiber.StatusUnauthorized, "authentication required")
 	}
 	orders, err := h.orders.PendingForDelivery(deliveryID)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(fiber.Map{"orders": orders})
+}
+
+// MyDeliveryOrders returns the rider's own orders by ?status=accepted|completed.
+func (h *CommerceHandler) MyDeliveryOrders(c *fiber.Ctx) error {
+	deliveryID, ok := middleware.UserID(c)
+	if !ok {
+		return writeError(c, fiber.StatusUnauthorized, "authentication required")
+	}
+	status := c.Query("status", "accepted")
+	orders, err := h.orders.MineForDelivery(deliveryID, status)
 	if err != nil {
 		return serviceError(c, err)
 	}

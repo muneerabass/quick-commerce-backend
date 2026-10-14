@@ -14,7 +14,7 @@ import (
 type CatalogRepository interface {
 	ListActiveStores(db *gorm.DB) ([]domain.Store, error)
 	ListAllStores(db *gorm.DB) ([]domain.Store, error)
-	ListAllProducts(db *gorm.DB) ([]domain.Product, error)
+	ListAllProducts(db *gorm.DB, storeID *uuid.UUID) ([]domain.Product, error)
 	ListInventoryForStore(db *gorm.DB, storeID uuid.UUID) ([]domain.Inventory, error)
 	ListCategories(db *gorm.DB) ([]domain.Category, error)
 	FindStore(db *gorm.DB, id uuid.UUID) (*domain.Store, error)
@@ -45,9 +45,13 @@ func (r *catalogRepository) ListAllStores(db *gorm.DB) ([]domain.Store, error) {
 	return stores, err
 }
 
-func (r *catalogRepository) ListAllProducts(db *gorm.DB) ([]domain.Product, error) {
+func (r *catalogRepository) ListAllProducts(db *gorm.DB, storeID *uuid.UUID) ([]domain.Product, error) {
 	var products []domain.Product
-	err := dbOrDefault(db, r.db).Order("name ASC").Find(&products).Error
+	query := dbOrDefault(db, r.db).Order("name ASC")
+	if storeID != nil {
+		query = query.Where("store_id = ?", *storeID)
+	}
+	err := query.Find(&products).Error
 	return products, err
 }
 
@@ -103,15 +107,17 @@ func (r *catalogRepository) CreateProduct(db *gorm.DB, product *domain.Product) 
 }
 
 func (r *catalogRepository) UpdateProduct(db *gorm.DB, product *domain.Product) error {
-	return dbOrDefault(db, r.db).Model(&domain.Product{}).Where("id = ?", product.ID).Updates(map[string]any{
-		"name": product.Name, "description": product.Description, "price": product.Price, "image_url": product.ImageURL, "category_id": product.CategoryID,
-	}).Error
+	// GORM applies the `serializer:json` tag on Images when using the model API
+	// with Select, so we update the full model rather than a raw column map.
+	return dbOrDefault(db, r.db).Model(product).Where("id = ?", product.ID).
+		Select("name", "description", "price", "image_url", "images", "category_id").
+		Updates(product).Error
 }
 
 func (r *catalogRepository) ListProductsForStore(db *gorm.DB, storeID uuid.UUID) ([]domain.ProductInventory, error) {
 	var rows []domain.ProductInventory
 	err := dbOrDefault(db, r.db).Table("products").Select(
-		"products.id, products.name, products.description, products.price, products.image_url, products.category_id, products.created_at, inventory.quantity",
+		"products.id, products.store_id, products.name, products.description, products.price, products.image_url, products.images, products.category_id, products.created_at, inventory.quantity",
 	).Joins("JOIN inventory ON inventory.product_id = products.id AND inventory.store_id = ? AND inventory.quantity > 0", storeID).
 		Order("products.name ASC").Scan(&rows).Error
 	return rows, err
@@ -164,6 +170,7 @@ type CommerceRepository interface {
 	FindOrderForUser(db *gorm.DB, userID, orderID uuid.UUID) (*domain.Order, error)
 	ListOrderItems(db *gorm.DB, orderID uuid.UUID) ([]domain.OrderItem, error)
 	ListPendingOrdersForDelivery(db *gorm.DB, deliveryID uuid.UUID) ([]domain.Order, error)
+	ListOrdersForDeliveryBy(db *gorm.DB, deliveryID uuid.UUID, status string) ([]domain.Order, error)
 	AcceptOrder(db *gorm.DB, orderID, deliveryID uuid.UUID, now time.Time) error
 	CompleteOrder(db *gorm.DB, orderID, deliveryID uuid.UUID, now time.Time) error
 	CreateAssignment(db *gorm.DB, assignment *domain.DeliveryStoreAssignment) error
@@ -301,9 +308,24 @@ func (r *commerceRepository) ListPendingOrdersForDelivery(db *gorm.DB, deliveryI
 }
 
 func (r *commerceRepository) AcceptOrder(db *gorm.DB, orderID, deliveryID uuid.UUID, now time.Time) error {
-	query := dbOrDefault(db, r.db).Model(&domain.Order{}).Where(
-		"id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM delivery_store_assignments dsa WHERE dsa.store_id = orders.store_id AND dsa.delivery_id = ?)",
-		orderID, deliveryID,
+	base := dbOrDefault(db, r.db)
+
+	// A rider may hold only one active delivery at a time. Check first so we can
+	// return a clear "finish your current delivery" error; the NOT EXISTS clause
+	// in the UPDATE below keeps it race-safe if two accepts land concurrently.
+	var activeCount int64
+	if err := base.Model(&domain.Order{}).Where("accepted_by = ? AND status = ?", deliveryID, "accepted").Count(&activeCount).Error; err != nil {
+		return err
+	}
+	if activeCount > 0 {
+		return ErrRiderBusy
+	}
+
+	query := base.Model(&domain.Order{}).Where(
+		"id = ? AND status = 'pending'"+
+			" AND NOT EXISTS (SELECT 1 FROM orders o2 WHERE o2.accepted_by = ? AND o2.status = 'accepted')"+
+			" AND EXISTS (SELECT 1 FROM delivery_store_assignments dsa WHERE dsa.store_id = orders.store_id AND dsa.delivery_id = ?)",
+		orderID, deliveryID, deliveryID,
 	).Updates(map[string]any{"status": "accepted", "accepted_by": deliveryID, "accepted_at": now, "updated_at": now})
 	if query.Error != nil {
 		return query.Error
@@ -312,6 +334,15 @@ func (r *commerceRepository) AcceptOrder(db *gorm.DB, orderID, deliveryID uuid.U
 		return ErrOrderUnavailable
 	}
 	return nil
+}
+
+// ListOrdersForDeliveryBy returns a rider's own orders filtered by status
+// (e.g. "accepted" active deliveries, or "completed" history).
+func (r *commerceRepository) ListOrdersForDeliveryBy(db *gorm.DB, deliveryID uuid.UUID, status string) ([]domain.Order, error) {
+	var orders []domain.Order
+	err := dbOrDefault(db, r.db).Where("accepted_by = ? AND status = ?", deliveryID, status).
+		Order("updated_at DESC").Find(&orders).Error
+	return orders, err
 }
 
 func (r *commerceRepository) CompleteOrder(db *gorm.DB, orderID, deliveryID uuid.UUID, now time.Time) error {
@@ -353,3 +384,7 @@ func (r *commerceRepository) IsAssigned(db *gorm.DB, deliveryID, storeID uuid.UU
 }
 
 var ErrOrderUnavailable = errors.New("order is no longer available")
+
+// ErrRiderBusy is returned when a delivery rider tries to accept a new order
+// while they already have an active (accepted, not yet completed) delivery.
+var ErrRiderBusy = errors.New("finish your current delivery before accepting another order")

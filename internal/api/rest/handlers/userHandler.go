@@ -290,7 +290,7 @@ func serviceError(c *fiber.Ctx, err error) error {
 	switch {
 	case errors.Is(err, services.ErrInvalidInput), errors.Is(err, services.ErrInvalidPhone), errors.Is(err, services.ErrInvalidOTP), errors.Is(err, services.ErrOTPExpired), errors.Is(err, services.ErrOTPAttemptsExceeded), errors.Is(err, services.ErrInvalidRefreshToken), errors.Is(err, services.ErrSessionRevoked), errors.Is(err, services.ErrCartStoreMismatch), errors.Is(err, services.ErrEmptyCart), errors.Is(err, services.ErrInsufficientStock), errors.Is(err, services.ErrInvalidRole), errors.Is(err, repository.ErrNotFound):
 		return writeError(c, fiber.StatusBadRequest, err.Error())
-	case errors.Is(err, repository.ErrOrderUnavailable), errors.Is(err, gorm.ErrDuplicatedKey):
+	case errors.Is(err, repository.ErrOrderUnavailable), errors.Is(err, repository.ErrRiderBusy), errors.Is(err, gorm.ErrDuplicatedKey):
 		return writeError(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrOTPTooSoon), errors.Is(err, services.ErrOTPRateLimited):
 		return writeError(c, fiber.StatusTooManyRequests, err.Error())

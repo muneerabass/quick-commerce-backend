@@ -13,13 +13,15 @@ type StoreResponse struct {
 }
 
 type CatalogProductResponse struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Description *string `json:"description,omitempty"`
-	Price       int     `json:"price"`
-	ImageURL    *string `json:"image_url,omitempty"`
-	CategoryID  *string `json:"category_id,omitempty"`
-	Quantity    int     `json:"quantity"`
+	ID          string   `json:"id"`
+	StoreID     string   `json:"store_id,omitempty"`
+	Name        string   `json:"name"`
+	Description *string  `json:"description,omitempty"`
+	Price       int      `json:"price"`
+	ImageURL    *string  `json:"image_url,omitempty"`
+	Images      []string `json:"images"`
+	CategoryID  *string  `json:"category_id,omitempty"`
+	Quantity    int      `json:"quantity"`
 }
 
 type NearbyStoreResponse struct {

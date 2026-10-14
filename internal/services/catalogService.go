@@ -65,9 +65,13 @@ func (s *CatalogService) Nearby(latitude, longitude, radiusKM float64) ([]dto.Ne
 				value := product.CategoryID.String()
 				categoryID = &value
 			}
+			images := product.Images
+			if images == nil {
+				images = []string{}
+			}
 			mappedProducts = append(mappedProducts, dto.CatalogProductResponse{
-				ID: product.ID.String(), Name: product.Name, Description: product.Description,
-				Price: product.Price, ImageURL: product.ImageURL, CategoryID: categoryID, Quantity: product.Quantity,
+				ID: product.ID.String(), StoreID: product.StoreID.String(), Name: product.Name, Description: product.Description,
+				Price: product.Price, ImageURL: product.ImageURL, Images: images, CategoryID: categoryID, Quantity: product.Quantity,
 			})
 		}
 		response = append(response, dto.NearbyStoreResponse{
@@ -102,14 +106,25 @@ func (s *AdminService) ListStores() ([]dto.StoreResponse, error) {
 	return response, nil
 }
 
-func (s *AdminService) ListProducts() ([]dto.CatalogProductResponse, error) {
-	products, err := s.catalog.ListAllProducts(nil)
+// ListProducts returns products, optionally scoped to a single store. Each
+// product now belongs to exactly one store, so admins browse items per store.
+func (s *AdminService) ListProducts(storeID *uuid.UUID) ([]dto.CatalogProductResponse, error) {
+	products, err := s.catalog.ListAllProducts(nil, storeID)
 	if err != nil {
 		return nil, err
 	}
+	// Attach per-store stock so the admin list shows live quantities.
+	quantities := map[uuid.UUID]int{}
+	if storeID != nil {
+		if rows, err := s.catalog.ListInventoryForStore(nil, *storeID); err == nil {
+			for _, row := range rows {
+				quantities[row.ProductID] = row.Quantity
+			}
+		}
+	}
 	response := make([]dto.CatalogProductResponse, 0, len(products))
 	for i := range products {
-		response = append(response, mapProduct(&products[i], 0))
+		response = append(response, mapProduct(&products[i], quantities[products[i].ID]))
 	}
 	return response, nil
 }
@@ -197,15 +212,36 @@ func (s *AdminService) CreateProduct(request dto.ProductRequest) (dto.CatalogPro
 	if request.Price < 0 {
 		return dto.CatalogProductResponse{}, fmt.Errorf("%w: price cannot be negative", ErrInvalidInput)
 	}
+	storeID, err := uuid.Parse(strings.TrimSpace(request.StoreID))
+	if err != nil {
+		return dto.CatalogProductResponse{}, fmt.Errorf("%w: store_id is required", ErrInvalidInput)
+	}
+	if _, err := s.catalog.FindStore(nil, storeID); err != nil {
+		return dto.CatalogProductResponse{}, err
+	}
 	categoryID, err := optionalUUID(request.CategoryID)
 	if err != nil {
 		return dto.CatalogProductResponse{}, err
 	}
-	product := &domain.Product{ID: uuid.New(), Name: name, Description: trimOptional(request.Description), Price: request.Price, ImageURL: trimOptional(request.ImageURL), CategoryID: categoryID, CreatedAt: time.Now().UTC()}
+	images := normalizeImages(request.Images)
+	cover := coverImage(images, request.ImageURL)
+
+	product := &domain.Product{ID: uuid.New(), StoreID: storeID, Name: name, Description: trimOptional(request.Description), Price: request.Price, ImageURL: cover, Images: images, CategoryID: categoryID, CreatedAt: time.Now().UTC()}
 	if err := s.catalog.CreateProduct(nil, product); err != nil {
 		return dto.CatalogProductResponse{}, err
 	}
-	return mapProduct(product, 0), nil
+
+	// A product only shows at its store once it has stock, so seed inventory in
+	// the same step. Defaults to 0 when no quantity was supplied.
+	quantity := 0
+	if request.Quantity != nil && *request.Quantity > 0 {
+		quantity = *request.Quantity
+	}
+	inventory := &domain.Inventory{ID: uuid.New(), StoreID: storeID, ProductID: product.ID, Quantity: quantity, UpdatedAt: time.Now().UTC()}
+	if err := s.catalog.UpsertInventory(nil, inventory); err != nil {
+		return dto.CatalogProductResponse{}, err
+	}
+	return mapProduct(product, quantity), nil
 }
 
 func (s *AdminService) UpdateProduct(id uuid.UUID, request dto.ProductPatchRequest) (dto.CatalogProductResponse, error) {
@@ -234,6 +270,10 @@ func (s *AdminService) UpdateProduct(id uuid.UUID, request dto.ProductPatchReque
 			return dto.CatalogProductResponse{}, err
 		}
 	}
+	if request.Images != nil {
+		product.Images = normalizeImages(*request.Images)
+		product.ImageURL = coverImage(product.Images, nil)
+	}
 	if request.ImageURL != nil {
 		product.ImageURL = trimOptional(request.ImageURL)
 	}
@@ -241,6 +281,27 @@ func (s *AdminService) UpdateProduct(id uuid.UUID, request dto.ProductPatchReque
 		return dto.CatalogProductResponse{}, err
 	}
 	return mapProduct(product, 0), nil
+}
+
+// normalizeImages trims, drops blanks, and de-nils an image URL list.
+func normalizeImages(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, url := range in {
+		if trimmed := strings.TrimSpace(url); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// coverImage picks the primary image: the first in the list, else the legacy
+// single image_url field when provided.
+func coverImage(images []string, fallback *string) *string {
+	if len(images) > 0 {
+		value := images[0]
+		return &value
+	}
+	return trimOptional(fallback)
 }
 
 func (s *AdminService) SetInventory(storeID, productID uuid.UUID, request dto.InventoryRequest) (domain.Inventory, error) {
@@ -333,7 +394,11 @@ func mapProduct(product *domain.Product, quantity int) dto.CatalogProductRespons
 		value := product.CategoryID.String()
 		categoryID = &value
 	}
-	return dto.CatalogProductResponse{ID: product.ID.String(), Name: product.Name, Description: product.Description, Price: product.Price, ImageURL: product.ImageURL, CategoryID: categoryID, Quantity: quantity}
+	images := product.Images
+	if images == nil {
+		images = []string{}
+	}
+	return dto.CatalogProductResponse{ID: product.ID.String(), StoreID: product.StoreID.String(), Name: product.Name, Description: product.Description, Price: product.Price, ImageURL: product.ImageURL, Images: images, CategoryID: categoryID, Quantity: quantity}
 }
 
 func validateCoordinates(latitude, longitude float64) error {

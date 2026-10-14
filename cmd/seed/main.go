@@ -96,7 +96,7 @@ func main() {
 	categoryByName := map[string]uuid.UUID{"Grocery": grocery.ID, "Beverages": beverages.ID}
 	for _, p := range products {
 		categoryID := categoryByName[p.Category]
-		product, err := upsertProductByName(db, p.Name, p.Description, p.PricePaise, p.ImageURL, categoryID, now)
+		product, err := upsertProductByName(db, store.ID, p.Name, p.Description, p.PricePaise, p.ImageURL, categoryID, now)
 		if err != nil {
 			log.Fatalf("product %s: %v", p.Name, err)
 		}
@@ -165,14 +165,14 @@ func upsertStoreByName(db *gorm.DB, name, address string, lat, lng float64, now 
 	return &store, nil
 }
 
-func upsertProductByName(db *gorm.DB, name, description string, price int, imageURL string, categoryID uuid.UUID, now time.Time) (*domain.Product, error) {
+func upsertProductByName(db *gorm.DB, storeID uuid.UUID, name, description string, price int, imageURL string, categoryID uuid.UUID, now time.Time) (*domain.Product, error) {
 	var product domain.Product
 	err := db.Where("name = ?", name).First(&product).Error
 	if err == nil {
 		return &product, nil
 	}
 	descCopy, imgCopy, catCopy := description, imageURL, categoryID
-	product = domain.Product{ID: uuid.New(), Name: name, Description: &descCopy, Price: price, ImageURL: &imgCopy, CategoryID: &catCopy, CreatedAt: now}
+	product = domain.Product{ID: uuid.New(), StoreID: storeID, Name: name, Description: &descCopy, Price: price, ImageURL: &imgCopy, Images: []string{imageURL}, CategoryID: &catCopy, CreatedAt: now}
 	if err := db.Create(&product).Error; err != nil {
 		return nil, err
 	}
