@@ -48,8 +48,8 @@ func TestAuthServiceOTPFirstLoginAndReusePrevention(t *testing.T) {
 	if err := auth.SendOTP(context.Background(), phone); err != nil {
 		t.Fatal(err)
 	}
-	if len(sender.otp) != 4 {
-		t.Fatalf("expected four-digit OTP, got %q", sender.otp)
+	if len(sender.otp) != 6 {
+		t.Fatalf("expected six-digit OTP, got %q", sender.otp)
 	}
 	response, err := auth.VerifyOTP(context.Background(), phone, sender.otp)
 	if err != nil {
@@ -101,9 +101,9 @@ func TestAuthServiceOTPExpiryAndAttemptLimit(t *testing.T) {
 	if err := auth2.SendOTP(context.Background(), phone); err != nil {
 		t.Fatal(err)
 	}
-	wrongOTP := "0000"
+	wrongOTP := "000000"
 	if wrongOTP == sender2.otp {
-		wrongOTP = "1111"
+		wrongOTP = "111111"
 	}
 	for i := 0; i < 2; i++ {
 		if _, err := auth2.VerifyOTP(context.Background(), phone, wrongOTP); !errors.Is(err, ErrInvalidOTP) {

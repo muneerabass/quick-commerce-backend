@@ -37,7 +37,7 @@ var (
 	ErrInvalidInput        = errors.New("invalid input")
 )
 
-var otpPattern = regexp.MustCompile(`^[0-9]{4}$`)
+var otpPattern = regexp.MustCompile(`^[0-9]{6}$`)
 
 type OTPSender interface {
 	Send(ctx context.Context, phone, otp string) error
@@ -372,11 +372,11 @@ func (s *AuthService) hashOTP(phone, otp string) string {
 }
 
 func generateOTP() (string, error) {
-	number, err := rand.Int(rand.Reader, big.NewInt(10000))
+	number, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%04d", number.Int64()), nil
+	return fmt.Sprintf("%06d", number.Int64()), nil
 }
 
 func randomToken(size int) (string, error) {
