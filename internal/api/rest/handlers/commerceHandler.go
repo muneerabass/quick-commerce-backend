@@ -98,7 +98,21 @@ func (h *CommerceHandler) AddCartItem(c *fiber.Ctx) error {
 	if err != nil {
 		return serviceError(c, err)
 	}
-	return c.Status(fiber.StatusCreated).JSON(response)
+	return h.cartResponse(c, userID, response, fiber.StatusCreated)
+}
+
+// cartResponse returns a mutation's cart. When the client says which address it
+// is checking out to (?address_id=), the cart is re-priced for it so serviceability
+// issues stay current after every change.
+func (h *CommerceHandler) cartResponse(c *fiber.Ctx, userID uuid.UUID, response dto.CartResponse, status int) error {
+	if value := c.Query("address_id"); value != "" {
+		if addressID, err := uuid.Parse(value); err == nil {
+			if full, err := h.cart.Get(userID, &addressID); err == nil {
+				response = full
+			}
+		}
+	}
+	return c.Status(status).JSON(response)
 }
 
 func (h *CommerceHandler) UpdateCartItem(c *fiber.Ctx) error {
@@ -118,7 +132,7 @@ func (h *CommerceHandler) UpdateCartItem(c *fiber.Ctx) error {
 	if err != nil {
 		return serviceError(c, err)
 	}
-	return c.JSON(response)
+	return h.cartResponse(c, userID, response, fiber.StatusOK)
 }
 
 func (h *CommerceHandler) DeleteCartItem(c *fiber.Ctx) error {
@@ -134,7 +148,7 @@ func (h *CommerceHandler) DeleteCartItem(c *fiber.Ctx) error {
 	if err != nil {
 		return serviceError(c, err)
 	}
-	return c.JSON(response)
+	return h.cartResponse(c, userID, response, fiber.StatusOK)
 }
 
 func (h *CommerceHandler) ClearCart(c *fiber.Ctx) error {
