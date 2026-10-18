@@ -57,3 +57,11 @@ type DeliveryUserRequest struct {
 	Phone string  `json:"phone"`
 	Name  *string `json:"name"`
 }
+
+type CompleteOrderRequest struct {
+	DeliveryCode string `json:"delivery_code"`
+}
+
+type CancelOrderRequest struct {
+	Reason string `json:"reason"`
+}

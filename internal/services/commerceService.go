@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"quick-commerce/internal/domain"
@@ -14,21 +15,37 @@ import (
 )
 
 type CartService struct {
-	db       *gorm.DB
-	catalog  repository.CatalogRepository
-	commerce repository.CommerceRepository
+	db        *gorm.DB
+	catalog   repository.CatalogRepository
+	commerce  repository.CommerceRepository
+	addresses repository.AddressRepository
 }
 
 func NewCartService(db *gorm.DB, catalog repository.CatalogRepository, commerce repository.CommerceRepository) *CartService {
 	return &CartService{db: db, catalog: catalog, commerce: commerce}
 }
 
-func (s *CartService) Get(userID uuid.UUID) (dto.CartResponse, error) {
+// WithAddresses lets Get check a chosen address for serviceability.
+func (s *CartService) WithAddresses(addresses repository.AddressRepository) *CartService {
+	s.addresses = addresses
+	return s
+}
+
+// Get returns the priced cart. With an address it also reports whether the cart's
+// store delivers there, so the app can warn before checkout.
+func (s *CartService) Get(userID uuid.UUID, addressID *uuid.UUID) (dto.CartResponse, error) {
 	cart, err := s.getOrCreateCart(userID)
 	if err != nil {
 		return dto.CartResponse{}, err
 	}
-	return s.mapCart(cart)
+	var address *domain.UserAddress
+	if addressID != nil && s.addresses != nil {
+		address, err = s.addresses.Find(nil, userID, *addressID)
+		if err != nil {
+			return dto.CartResponse{}, err
+		}
+	}
+	return s.mapCart(cart, address)
 }
 
 func (s *CartService) AddItem(userID uuid.UUID, request dto.AddCartItemRequest) (dto.CartResponse, error) {
@@ -42,6 +59,9 @@ func (s *CartService) AddItem(userID uuid.UUID, request dto.AddCartItemRequest) 
 	}
 	if request.Quantity <= 0 {
 		return dto.CartResponse{}, fmt.Errorf("%w: quantity must be greater than zero", ErrInvalidInput)
+	}
+	if request.Quantity > orderPolicy.MaxLineQuantity {
+		return dto.CartResponse{}, fmt.Errorf("%w: you can add at most %d of one item", ErrInvalidInput, orderPolicy.MaxLineQuantity)
 	}
 	store, err := s.catalog.FindStore(nil, storeID)
 	if err != nil {
@@ -85,6 +105,9 @@ func (s *CartService) AddItem(userID uuid.UUID, request dto.AddCartItemRequest) 
 		if itemErr == nil {
 			newQuantity += item.Quantity
 		}
+		if newQuantity > orderPolicy.MaxLineQuantity {
+			return fmt.Errorf("%w: you can add at most %d of one item", ErrInvalidInput, orderPolicy.MaxLineQuantity)
+		}
 		if inventory.Quantity < newQuantity {
 			return ErrInsufficientStock
 		}
@@ -93,17 +116,27 @@ func (s *CartService) AddItem(userID uuid.UUID, request dto.AddCartItemRequest) 
 			item.UpdatedAt = time.Now().UTC()
 			return s.commerce.UpdateCartItem(tx, item)
 		}
+		lines, err := s.commerce.ListCartItems(tx, cart.ID)
+		if err != nil {
+			return err
+		}
+		if len(lines) >= orderPolicy.MaxCartLines {
+			return fmt.Errorf("%w: a cart can hold at most %d different items", ErrInvalidInput, orderPolicy.MaxCartLines)
+		}
 		return s.commerce.CreateCartItem(tx, &domain.CartItem{ID: uuid.New(), CartID: cart.ID, ProductID: productID, Quantity: newQuantity, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()})
 	})
 	if err != nil {
 		return dto.CartResponse{}, err
 	}
-	return s.mapCart(cart)
+	return s.mapCart(cart, nil)
 }
 
 func (s *CartService) UpdateItem(userID, itemID uuid.UUID, quantity int) (dto.CartResponse, error) {
 	if quantity <= 0 {
 		return dto.CartResponse{}, fmt.Errorf("%w: quantity must be greater than zero", ErrInvalidInput)
+	}
+	if quantity > orderPolicy.MaxLineQuantity {
+		return dto.CartResponse{}, fmt.Errorf("%w: you can add at most %d of one item", ErrInvalidInput, orderPolicy.MaxLineQuantity)
 	}
 	var cart *domain.Cart
 	err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -133,7 +166,7 @@ func (s *CartService) UpdateItem(userID, itemID uuid.UUID, quantity int) (dto.Ca
 	if err != nil {
 		return dto.CartResponse{}, err
 	}
-	return s.mapCart(cart)
+	return s.mapCart(cart, nil)
 }
 
 func (s *CartService) DeleteItem(userID, itemID uuid.UUID) (dto.CartResponse, error) {
@@ -151,7 +184,7 @@ func (s *CartService) DeleteItem(userID, itemID uuid.UUID) (dto.CartResponse, er
 			return dto.CartResponse{}, err
 		}
 	}
-	return s.mapCart(cart)
+	return s.mapCart(cart, nil)
 }
 
 func (s *CartService) Clear(userID uuid.UUID) error {
@@ -186,29 +219,12 @@ func (s *CartService) findOrCreateCart(db *gorm.DB, userID uuid.UUID) (*domain.C
 	return cart, nil
 }
 
-func (s *CartService) mapCart(cart *domain.Cart) (dto.CartResponse, error) {
-	items, err := s.commerce.ListCartItems(nil, cart.ID)
+func (s *CartService) mapCart(cart *domain.Cart, address *domain.UserAddress) (dto.CartResponse, error) {
+	view, err := buildCartView(nil, s.catalog, s.commerce, cart, address)
 	if err != nil {
 		return dto.CartResponse{}, err
 	}
-	response := dto.CartResponse{ID: cart.ID.String(), Items: make([]dto.CartItemResponse, 0, len(items))}
-	if cart.StoreID != nil {
-		storeID := cart.StoreID.String()
-		response.StoreID = &storeID
-		if store, err := s.catalog.FindStore(nil, *cart.StoreID); err == nil {
-			response.StoreName = &store.Name
-		}
-	}
-	for _, item := range items {
-		product, err := s.catalog.FindProduct(nil, item.ProductID)
-		if err != nil {
-			return dto.CartResponse{}, err
-		}
-		lineTotal := product.Price * item.Quantity
-		response.TotalAmount += lineTotal
-		response.Items = append(response.Items, dto.CartItemResponse{ID: item.ID.String(), ProductID: product.ID.String(), ProductName: product.Name, ImageURL: product.ImageURL, UnitPrice: product.Price, Quantity: item.Quantity, LineTotal: lineTotal})
-	}
-	return response, nil
+	return view.Response, nil
 }
 
 type OrderService struct {
@@ -222,8 +238,23 @@ func NewOrderService(db *gorm.DB, addresses repository.AddressRepository, catalo
 	return &OrderService{db: db, addresses: addresses, catalog: catalog, commerce: commerce}
 }
 
-func (s *OrderService) Create(userID, addressID uuid.UUID) (dto.OrderResponse, error) {
+// Create turns the cart into a COD order. idempotencyKey (optional) makes a
+// retry of the same checkout return the original order instead of failing.
+func (s *OrderService) Create(userID, addressID uuid.UUID, idempotencyKey string) (dto.OrderResponse, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if len(idempotencyKey) > 100 {
+		return dto.OrderResponse{}, fmt.Errorf("%w: idempotency key is too long", ErrInvalidInput)
+	}
+	if existing, ok, err := s.existingForKey(userID, idempotencyKey); err != nil {
+		return dto.OrderResponse{}, err
+	} else if ok {
+		return existing, nil
+	}
 	address, err := s.addresses.Find(nil, userID, addressID)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+	code, err := generateDeliveryCode()
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
@@ -236,34 +267,36 @@ func (s *OrderService) Create(userID, addressID uuid.UUID) (dto.OrderResponse, e
 		if cart.StoreID == nil {
 			return ErrEmptyCart
 		}
-		items, err := s.commerce.ListCartItems(tx, cart.ID)
+		view, err := buildCartView(tx, s.catalog, s.commerce, cart, address)
 		if err != nil {
 			return err
 		}
-		if len(items) == 0 {
+		if len(view.Items) == 0 {
 			return ErrEmptyCart
 		}
-		store, err := s.catalog.FindStore(tx, *cart.StoreID)
-		if err != nil {
-			return err
+		if view.hasIssue(issueNotServed) {
+			return &NotServiceableError{Store: view.Store.Name, Pincode: address.Pincode}
 		}
-		if !store.IsActive {
-			return fmt.Errorf("%w: store is inactive", ErrInvalidInput)
+		if len(view.Response.Issues) > 0 {
+			return &CartUnavailableError{Issues: view.Response.Issues}
 		}
-		serves, err := s.catalog.StoreServesPincode(tx, store.ID, address.Pincode)
-		if err != nil {
-			return err
+		now := time.Now().UTC()
+		order = &domain.Order{
+			ID: uuid.New(), UserID: userID, StoreID: *cart.StoreID, Status: "pending", PaymentMethod: "cod", PaymentStatus: "pending",
+			SubtotalAmount: view.Response.SubtotalAmount, DeliveryFee: view.Response.DeliveryFee, HandlingFee: view.Response.HandlingFee,
+			TotalAmount:   view.Response.TotalAmount,
+			RecipientName: address.RecipientName, DeliveryPhone: address.Phone, AddressLine1: address.AddressLine1, AddressLine2: address.AddressLine2,
+			Landmark: address.Landmark, City: address.City, State: address.State, Pincode: address.Pincode,
+			Latitude: address.Latitude, Longitude: address.Longitude, DeliveryInstructions: address.DeliveryInstructions,
+			DeliveryCode: code, CreatedAt: now, UpdatedAt: now,
 		}
-		if !serves {
-			return &NotServiceableError{Store: store.Name, Pincode: address.Pincode}
+		if idempotencyKey != "" {
+			order.IdempotencyKey = &idempotencyKey
 		}
-		order = &domain.Order{ID: uuid.New(), UserID: userID, StoreID: *cart.StoreID, Status: "pending", PaymentMethod: "cod", PaymentStatus: "pending", RecipientName: address.RecipientName, DeliveryPhone: address.Phone, AddressLine1: address.AddressLine1, AddressLine2: address.AddressLine2, Landmark: address.Landmark, City: address.City, State: address.State, Pincode: address.Pincode, Latitude: address.Latitude, Longitude: address.Longitude, DeliveryInstructions: address.DeliveryInstructions, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-		orderItems := make([]domain.OrderItem, 0, len(items))
-		for _, cartItem := range items {
-			product, err := s.catalog.FindProduct(tx, cartItem.ProductID)
-			if err != nil {
-				return err
-			}
+		orderItems := make([]domain.OrderItem, 0, len(view.Items))
+		for i, cartItem := range view.Items {
+			product := view.Products[i]
+			// Rows were locked and checked in buildCartView; decrement them now.
 			inventory, err := s.catalog.FindInventoryForUpdate(tx, *cart.StoreID, cartItem.ProductID)
 			if err != nil {
 				return err
@@ -272,36 +305,70 @@ func (s *OrderService) Create(userID, addressID uuid.UUID) (dto.OrderResponse, e
 				return ErrInsufficientStock
 			}
 			inventory.Quantity -= cartItem.Quantity
-			inventory.UpdatedAt = time.Now().UTC()
+			inventory.UpdatedAt = now
 			if err := s.catalog.UpdateInventory(tx, inventory); err != nil {
 				return err
 			}
-			lineTotal := product.Price * cartItem.Quantity
-			order.TotalAmount += lineTotal
-			orderItems = append(orderItems, domain.OrderItem{ID: uuid.New(), ProductID: product.ID, ProductName: product.Name, UnitPrice: product.Price, Quantity: cartItem.Quantity, LineTotal: lineTotal})
+			orderItems = append(orderItems, domain.OrderItem{ID: uuid.New(), ProductID: product.ID, ProductName: product.Name, UnitPrice: product.Price, Quantity: cartItem.Quantity, LineTotal: product.Price * cartItem.Quantity})
 		}
 		if err := s.commerce.CreateOrder(tx, order, orderItems); err != nil {
+			return err
+		}
+		if err := s.recordEvent(tx, order.ID, "pending", &userID, "customer", "Order placed"); err != nil {
 			return err
 		}
 		if err := s.commerce.ClearCart(tx, cart.ID); err != nil {
 			return err
 		}
 		cart.StoreID = nil
-		cart.UpdatedAt = time.Now().UTC()
+		cart.UpdatedAt = now
 		return s.commerce.UpdateCart(tx, cart)
 	})
 	if err != nil {
+		// A concurrent request with the same key may have won the race.
+		if existing, ok, lookupErr := s.existingForKey(userID, idempotencyKey); lookupErr == nil && ok {
+			return existing, nil
+		}
 		return dto.OrderResponse{}, err
 	}
-	return s.mapOrder(order)
+	return s.mapOrderDetail(order, viewerCustomer)
 }
 
-func (s *OrderService) List(userID uuid.UUID) ([]dto.OrderResponse, error) {
-	orders, err := s.commerce.ListOrdersForUser(nil, userID)
-	if err != nil {
-		return nil, err
+func (s *OrderService) existingForKey(userID uuid.UUID, key string) (dto.OrderResponse, bool, error) {
+	if key == "" {
+		return dto.OrderResponse{}, false, nil
 	}
-	return s.mapOrders(orders)
+	existing, err := s.commerce.FindOrderByIdempotencyKey(nil, userID, key)
+	if errors.Is(err, repository.ErrNotFound) {
+		return dto.OrderResponse{}, false, nil
+	}
+	if err != nil {
+		return dto.OrderResponse{}, false, err
+	}
+	response, err := s.mapOrderDetail(existing, viewerCustomer)
+	return response, err == nil, err
+}
+
+// List returns a page of the customer's orders, newest first. Pass the previous
+// page's NextBefore to continue.
+func (s *OrderService) List(userID uuid.UUID, limit int, before *time.Time) (dto.OrderPage, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	orders, err := s.commerce.ListOrdersForUserPage(nil, userID, limit, before)
+	if err != nil {
+		return dto.OrderPage{}, err
+	}
+	mapped, err := s.mapOrders(orders)
+	if err != nil {
+		return dto.OrderPage{}, err
+	}
+	page := dto.OrderPage{Orders: mapped}
+	if len(orders) == limit {
+		next := orders[len(orders)-1].CreatedAt
+		page.NextBefore = &next
+	}
+	return page, nil
 }
 
 func (s *OrderService) Get(userID, orderID uuid.UUID) (dto.OrderResponse, error) {
@@ -309,7 +376,7 @@ func (s *OrderService) Get(userID, orderID uuid.UUID) (dto.OrderResponse, error)
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
-	return s.mapOrder(order)
+	return s.mapOrderDetail(order, viewerCustomer)
 }
 
 func (s *OrderService) PendingForDelivery(deliveryID uuid.UUID) ([]dto.OrderResponse, error) {
@@ -341,7 +408,7 @@ func (s *OrderService) GetForDelivery(deliveryID, orderID uuid.UUID) (dto.OrderR
 		return dto.OrderResponse{}, err
 	}
 	if order.AcceptedBy != nil && *order.AcceptedBy == deliveryID {
-		return s.mapOrder(order)
+		return s.mapOrderDetail(order, viewerRider)
 	}
 	if order.Status == "pending" {
 		assigned, err := s.commerce.IsAssigned(nil, deliveryID, order.StoreID)
@@ -349,7 +416,7 @@ func (s *OrderService) GetForDelivery(deliveryID, orderID uuid.UUID) (dto.OrderR
 			return dto.OrderResponse{}, err
 		}
 		if assigned {
-			return s.mapOrder(order)
+			return s.mapOrderDetail(order, viewerRider)
 		}
 	}
 	return dto.OrderResponse{}, repository.ErrNotFound
@@ -357,35 +424,57 @@ func (s *OrderService) GetForDelivery(deliveryID, orderID uuid.UUID) (dto.OrderR
 
 func (s *OrderService) Accept(deliveryID, orderID uuid.UUID) (dto.OrderResponse, error) {
 	now := time.Now().UTC()
-	if err := s.commerce.AcceptOrder(nil, orderID, deliveryID, now); err != nil {
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.commerce.AcceptOrder(tx, orderID, deliveryID, now); err != nil {
+			return err
+		}
+		return s.recordEvent(tx, orderID, "accepted", &deliveryID, "delivery", "Rider accepted your order")
+	})
+	if err != nil {
 		return dto.OrderResponse{}, err
 	}
 	order, err := s.findOrder(orderID)
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
-	return s.mapOrder(order)
+	return s.mapOrderDetail(order, viewerRider)
 }
 
-func (s *OrderService) Complete(deliveryID, orderID uuid.UUID) (dto.OrderResponse, error) {
-	if err := s.commerce.CompleteOrder(nil, orderID, deliveryID, time.Now().UTC()); err != nil {
-		return dto.OrderResponse{}, err
-	}
+// Complete marks a COD order delivered. The rider must give the customer's
+// delivery code; repeating the call on an already-completed order returns it.
+func (s *OrderService) Complete(deliveryID, orderID uuid.UUID, code string) (dto.OrderResponse, error) {
 	order, err := s.findOrder(orderID)
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
-	return s.mapOrder(order)
+	if order.Status == "completed" && order.AcceptedBy != nil && *order.AcceptedBy == deliveryID {
+		return s.mapOrderDetail(order, viewerRider)
+	}
+	if order.Status != "accepted" || order.AcceptedBy == nil || *order.AcceptedBy != deliveryID {
+		return dto.OrderResponse{}, repository.ErrOrderUnavailable
+	}
+	if err := s.verifyDeliveryCode(order, code); err != nil {
+		return dto.OrderResponse{}, err
+	}
+	now := time.Now().UTC()
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.commerce.CompleteOrder(tx, orderID, deliveryID, now); err != nil {
+			return err
+		}
+		return s.recordEvent(tx, orderID, "completed", &deliveryID, "delivery", "Delivered and cash collected")
+	})
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+	order, err = s.findOrder(orderID)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+	return s.mapOrderDetail(order, viewerRider)
 }
 
 func (s *OrderService) findOrder(orderID uuid.UUID) (*domain.Order, error) {
-	var order domain.Order
-	if err := s.db.Where("id = ?", orderID).First(&order).Error; errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, repository.ErrNotFound
-	} else if err != nil {
-		return nil, err
-	}
-	return &order, nil
+	return s.commerce.FindOrderByID(nil, orderID)
 }
 
 func (s *OrderService) mapOrders(orders []domain.Order) ([]dto.OrderResponse, error) {
@@ -400,12 +489,26 @@ func (s *OrderService) mapOrders(orders []domain.Order) ([]dto.OrderResponse, er
 	return responses, nil
 }
 
+// mapOrder is the light form used in lists: items and totals, no history, rider or code.
 func (s *OrderService) mapOrder(order *domain.Order) (dto.OrderResponse, error) {
 	items, err := s.commerce.ListOrderItems(nil, order.ID)
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
-	response := dto.OrderResponse{ID: order.ID.String(), StoreID: order.StoreID.String(), Status: order.Status, PaymentMethod: order.PaymentMethod, PaymentStatus: order.PaymentStatus, TotalAmount: order.TotalAmount, RecipientName: order.RecipientName, DeliveryPhone: order.DeliveryPhone, AddressLine1: order.AddressLine1, AddressLine2: order.AddressLine2, Landmark: order.Landmark, City: order.City, State: order.State, Pincode: order.Pincode, Latitude: order.Latitude, Longitude: order.Longitude, AcceptedAt: order.AcceptedAt, CompletedAt: order.CompletedAt, CreatedAt: order.CreatedAt, UpdatedAt: order.UpdatedAt, Items: make([]dto.OrderItemResponse, 0, len(items))}
+	collect := 0
+	if order.PaymentStatus == "pending" && (order.Status == "pending" || order.Status == "accepted") {
+		collect = order.TotalAmount
+	}
+	response := dto.OrderResponse{
+		ID: order.ID.String(), StoreID: order.StoreID.String(), Status: order.Status, PaymentMethod: order.PaymentMethod,
+		PaymentStatus: order.PaymentStatus, TotalAmount: order.TotalAmount, RecipientName: order.RecipientName,
+		DeliveryPhone: order.DeliveryPhone, AddressLine1: order.AddressLine1, AddressLine2: order.AddressLine2,
+		Landmark: order.Landmark, City: order.City, State: order.State, Pincode: order.Pincode,
+		Latitude: order.Latitude, Longitude: order.Longitude, AcceptedAt: order.AcceptedAt, CompletedAt: order.CompletedAt,
+		CreatedAt: order.CreatedAt, UpdatedAt: order.UpdatedAt, Items: make([]dto.OrderItemResponse, 0, len(items)),
+		SubtotalAmount: order.SubtotalAmount, DeliveryFee: order.DeliveryFee, HandlingFee: order.HandlingFee,
+		AmountToCollect: collect, CancelledAt: order.CancelledAt, CancelReason: order.CancelReason, CancelledByRole: order.CancelledByRole,
+	}
 	if store, err := s.catalog.FindStore(nil, order.StoreID); err == nil {
 		response.StoreName = store.Name
 	}

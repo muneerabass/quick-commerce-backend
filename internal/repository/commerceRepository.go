@@ -232,6 +232,22 @@ type CommerceRepository interface {
 	CreateAssignment(db *gorm.DB, assignment *domain.DeliveryStoreAssignment) error
 	DeleteAssignment(db *gorm.DB, deliveryID, storeID uuid.UUID) error
 	IsAssigned(db *gorm.DB, deliveryID, storeID uuid.UUID) (bool, error)
+
+	// Order lifecycle (orderRepository.go).
+	FindOrderByID(db *gorm.DB, orderID uuid.UUID) (*domain.Order, error)
+	FindOrderByIdempotencyKey(db *gorm.DB, userID uuid.UUID, key string) (*domain.Order, error)
+	ListOrdersForUserPage(db *gorm.DB, userID uuid.UUID, limit int, before *time.Time) ([]domain.Order, error)
+	ListOrdersAdmin(db *gorm.DB, filter OrderFilter) ([]domain.Order, error)
+	CancelOrder(db *gorm.DB, orderID uuid.UUID, onlyUser *uuid.UUID, allowed []string, cancel OrderCancellation) error
+	ReassignOrder(db *gorm.DB, orderID uuid.UUID, now time.Time) error
+	RestoreInventory(db *gorm.DB, orderID uuid.UUID, now time.Time) error
+	ListStalePendingOrderIDs(db *gorm.DB, cutoff time.Time, limit int) ([]uuid.UUID, error)
+	RecordWrongDeliveryCode(db *gorm.DB, orderID uuid.UUID) (int, error)
+	AppendOrderEvent(db *gorm.DB, event *domain.OrderEvent) error
+	ListOrderEvents(db *gorm.DB, orderID uuid.UUID) ([]domain.OrderEvent, error)
+	CountActiveOrdersForCustomer(db *gorm.DB, userID uuid.UUID) (int64, error)
+	CountActiveOrdersForRider(db *gorm.DB, riderID uuid.UUID, storeID *uuid.UUID) (int64, error)
+	CountOpenOrdersForStore(db *gorm.DB, storeID uuid.UUID) (int64, error)
 }
 
 type commerceRepository struct{ db *gorm.DB }

@@ -1,6 +1,10 @@
 package handlers
 
 import (
+	"fmt"
+	"strconv"
+	"time"
+
 	"quick-commerce/internal/api/middleware"
 	"quick-commerce/internal/api/rest"
 	"quick-commerce/internal/dto"
@@ -14,13 +18,15 @@ import (
 type CatalogHandler struct {
 	catalog *services.CatalogService
 	admin   *services.AdminService
+	orders  *services.OrderService
 }
 
 func SetupCatalogRoutes(rh *rest.RestHandler, auth *services.AuthService) {
 	catalogRepository := repository.NewCatalogRepository(rh.Db)
 	commerceRepository := repository.NewCommerceRepository(rh.Db)
 	admin := services.NewAdminService(rh.Db, repository.NewUserRepository(rh.Db), catalogRepository, commerceRepository)
-	h := &CatalogHandler{catalog: services.NewCatalogService(catalogRepository), admin: admin}
+	orders := services.NewOrderService(rh.Db, repository.NewAddressRepository(rh.Db), catalogRepository, commerceRepository)
+	h := &CatalogHandler{catalog: services.NewCatalogService(catalogRepository), admin: admin, orders: orders}
 
 	api := rh.App.Group("/api/v1")
 	api.Get("/catalog/products", h.Products)
@@ -36,6 +42,9 @@ func SetupCatalogRoutes(rh *rest.RestHandler, auth *services.AuthService) {
 	adminRoutes.Get("/stores/:storeID/inventory", h.ListInventory)
 	adminRoutes.Put("/stores/:storeID/inventory/:productID", h.SetInventory)
 	adminRoutes.Get("/categories", h.ListCategories)
+	adminRoutes.Get("/orders", h.ListOrders)
+	adminRoutes.Post("/orders/:orderID/cancel", h.CancelOrder)
+	adminRoutes.Post("/orders/:orderID/reassign", h.ReassignOrder)
 	adminRoutes.Post("/delivery-users", h.CreateDeliveryUser)
 	adminRoutes.Put("/delivery-users/:deliveryID/stores/:storeID", h.AssignDeliveryUser)
 	adminRoutes.Delete("/delivery-users/:deliveryID/stores/:storeID", h.RemoveDeliveryAssignment)
@@ -219,4 +228,75 @@ func parseParamUUID(c *fiber.Ctx, name string) (uuid.UUID, error) {
 		return uuid.Nil, services.ErrInvalidInput
 	}
 	return id, nil
+}
+
+// ListOrders is the admin order queue. ?stale=true shows accepted orders a rider
+// has held longer than the stale threshold.
+func (h *CatalogHandler) ListOrders(c *fiber.Ctx) error {
+	filter := repository.OrderFilter{Status: c.Query("status")}
+	switch filter.Status {
+	case "", "pending", "accepted", "completed", "cancelled":
+	default:
+		return serviceError(c, fmt.Errorf("%w: unknown status", services.ErrInvalidInput))
+	}
+	if c.Query("stale") == "true" {
+		cutoff := time.Now().UTC().Add(-services.StaleAcceptedAfter())
+		filter.AcceptedBefore = &cutoff
+	}
+	if value := c.Query("store_id"); value != "" {
+		id, err := uuid.Parse(value)
+		if err != nil {
+			return serviceError(c, services.ErrInvalidInput)
+		}
+		filter.StoreID = &id
+	}
+	if value := c.Query("before"); value != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			return serviceError(c, fmt.Errorf("%w: invalid before cursor", services.ErrInvalidInput))
+		}
+		filter.Before = &parsed
+	}
+	filter.Limit, _ = strconv.Atoi(c.Query("limit"))
+	orders, err := h.orders.AdminList(filter)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(fiber.Map{"orders": orders})
+}
+
+func (h *CatalogHandler) CancelOrder(c *fiber.Ctx) error {
+	adminID, ok := middleware.UserID(c)
+	if !ok {
+		return writeError(c, fiber.StatusUnauthorized, "authentication required")
+	}
+	orderID, err := parseParamUUID(c, "orderID")
+	if err != nil {
+		return serviceError(c, err)
+	}
+	var request dto.CancelOrderRequest
+	if err := c.BodyParser(&request); err != nil {
+		return writeError(c, fiber.StatusBadRequest, "invalid request body")
+	}
+	order, err := h.orders.AdminCancel(adminID, orderID, request.Reason)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(order)
+}
+
+func (h *CatalogHandler) ReassignOrder(c *fiber.Ctx) error {
+	adminID, ok := middleware.UserID(c)
+	if !ok {
+		return writeError(c, fiber.StatusUnauthorized, "authentication required")
+	}
+	orderID, err := parseParamUUID(c, "orderID")
+	if err != nil {
+		return serviceError(c, err)
+	}
+	order, err := h.orders.AdminReassign(adminID, orderID)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(order)
 }

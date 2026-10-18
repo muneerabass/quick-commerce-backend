@@ -8,6 +8,9 @@ type StoreResponse struct {
 	Address  string   `json:"address"`
 	Pincodes []string `json:"pincodes"`
 	IsActive bool     `json:"is_active"`
+	// OpenOrders is set when a store is deactivated: pending/accepted orders
+	// still being served.
+	OpenOrders int `json:"open_orders,omitempty"`
 }
 
 type CatalogProductResponse struct {
@@ -48,14 +51,34 @@ type CartItemResponse struct {
 	UnitPrice   int     `json:"unit_price"`
 	Quantity    int     `json:"quantity"`
 	LineTotal   int     `json:"line_total"`
+	// AvailableQuantity is the stock the store has right now; below Quantity
+	// means the line cannot be fulfilled as-is.
+	AvailableQuantity int `json:"available_quantity"`
+}
+
+// CartIssue explains why a cart cannot be checked out as it stands.
+type CartIssue struct {
+	Code              string  `json:"code"`
+	ItemID            *string `json:"item_id,omitempty"`
+	Message           string  `json:"message"`
+	AvailableQuantity *int    `json:"available_quantity,omitempty"`
 }
 
 type CartResponse struct {
-	ID          string             `json:"id"`
-	StoreID     *string            `json:"store_id,omitempty"`
-	StoreName   *string            `json:"store_name,omitempty"`
-	Items       []CartItemResponse `json:"items"`
-	TotalAmount int                `json:"total_amount"`
+	ID        string             `json:"id"`
+	StoreID   *string            `json:"store_id,omitempty"`
+	StoreName *string            `json:"store_name,omitempty"`
+	Items     []CartItemResponse `json:"items"`
+	// SubtotalAmount is items only; TotalAmount is what the customer pays
+	// (subtotal + delivery + handling). All amounts are in paise.
+	SubtotalAmount        int         `json:"subtotal_amount"`
+	DeliveryFee           int         `json:"delivery_fee"`
+	HandlingFee           int         `json:"handling_fee"`
+	TotalAmount           int         `json:"total_amount"`
+	FreeDeliveryThreshold int         `json:"free_delivery_threshold"`
+	AmountToFreeDelivery  int         `json:"amount_to_free_delivery"`
+	Issues                []CartIssue `json:"issues"`
+	CanCheckout           bool        `json:"can_checkout"`
 }
 
 type OrderItemResponse struct {
@@ -90,4 +113,35 @@ type OrderResponse struct {
 	Items         []OrderItemResponse `json:"items"`
 	CreatedAt     time.Time           `json:"created_at"`
 	UpdatedAt     time.Time           `json:"updated_at"`
+
+	SubtotalAmount int `json:"subtotal_amount"`
+	DeliveryFee    int `json:"delivery_fee"`
+	HandlingFee    int `json:"handling_fee"`
+	// AmountToCollect is the cash the rider takes at the door (0 once settled).
+	AmountToCollect int        `json:"amount_to_collect"`
+	CancelledAt     *time.Time `json:"cancelled_at,omitempty"`
+	CancelReason    *string    `json:"cancel_reason,omitempty"`
+	CancelledByRole *string    `json:"cancelled_by_role,omitempty"`
+	// DeliveryCode is only sent to the customer who owns the order, while it is open.
+	DeliveryCode string               `json:"delivery_code,omitempty"`
+	Rider        *RiderInfo           `json:"rider,omitempty"`
+	Events       []OrderEventResponse `json:"events,omitempty"`
+}
+
+type RiderInfo struct {
+	Name  *string `json:"name,omitempty"`
+	Phone string  `json:"phone"`
+}
+
+type OrderEventResponse struct {
+	Status    string    `json:"status"`
+	ActorRole string    `json:"actor_role"`
+	Note      *string   `json:"note,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// OrderPage is one page of a customer's orders; pass NextBefore as ?before= for the next.
+type OrderPage struct {
+	Orders     []OrderResponse `json:"orders"`
+	NextBefore *time.Time      `json:"next_before,omitempty"`
 }

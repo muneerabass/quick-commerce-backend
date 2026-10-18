@@ -110,7 +110,32 @@ type Order struct {
 	CompletedAt          *time.Time `json:"completed_at,omitempty"`
 	CreatedAt            time.Time  `json:"created_at"`
 	UpdatedAt            time.Time  `json:"updated_at"`
+
+	// TotalAmount is the grand total (subtotal + fees) the rider collects.
+	SubtotalAmount       int        `json:"subtotal_amount"`
+	DeliveryFee          int        `json:"delivery_fee"`
+	HandlingFee          int        `json:"handling_fee"`
+	CancelledAt          *time.Time `json:"cancelled_at,omitempty"`
+	CancelledBy          *uuid.UUID `json:"-" gorm:"type:uuid"`
+	CancelledByRole      *string    `json:"-"`
+	CancelReason         *string    `json:"cancel_reason,omitempty"`
+	DeliveryCode         string     `json:"-"`
+	DeliveryCodeAttempts int        `json:"-"`
+	IdempotencyKey       *string    `json:"-"`
 }
+
+// OrderEvent is one entry in an order's status history.
+type OrderEvent struct {
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey"`
+	OrderID   uuid.UUID `gorm:"type:uuid;index"`
+	Status    string
+	ActorID   *uuid.UUID `gorm:"type:uuid"`
+	ActorRole string
+	Note      *string
+	CreatedAt time.Time
+}
+
+func (OrderEvent) TableName() string { return "order_status_events" }
 
 type OrderItem struct {
 	ID          uuid.UUID `json:"id" gorm:"type:uuid;primaryKey"`

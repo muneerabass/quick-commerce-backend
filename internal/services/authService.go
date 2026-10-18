@@ -357,6 +357,14 @@ func (s *AuthService) UpdateProfile(userID uuid.UUID, name *string) (dto.UserRes
 }
 
 func (s *AuthService) DeleteAccount(userID uuid.UUID) error {
+	// A customer with an open order, or a rider mid-delivery, can't vanish.
+	var open int64
+	if err := s.db.Table("orders").Where("(user_id = ? AND status IN ('pending','accepted')) OR (accepted_by = ? AND status = 'accepted')", userID, userID).Count(&open).Error; err != nil {
+		return err
+	}
+	if open > 0 {
+		return ErrActiveOrders
+	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		if err := s.users.Anonymize(tx, userID); err != nil {
 			return err

@@ -242,7 +242,14 @@ func (s *AdminService) UpdateStore(id uuid.UUID, request dto.StorePatchRequest) 
 		}
 		store.Pincodes = existing[store.ID]
 	}
-	return mapStore(store), nil
+	response := mapStore(store)
+	if !store.IsActive {
+		// Open orders keep being served; tell the admin how many are in flight.
+		if open, err := s.commerce.CountOpenOrdersForStore(nil, store.ID); err == nil {
+			response.OpenOrders = int(open)
+		}
+	}
+	return response, nil
 }
 
 func (s *AdminService) CreateProduct(request dto.ProductRequest) (dto.CatalogProductResponse, error) {
@@ -429,6 +436,14 @@ func (s *AdminService) AssignDeliveryUser(deliveryID, storeID uuid.UUID) error {
 }
 
 func (s *AdminService) RemoveDeliveryAssignment(deliveryID, storeID uuid.UUID) error {
+	// Taking a rider off a store while they hold one of its orders would strand it.
+	active, err := s.commerce.CountActiveOrdersForRider(nil, deliveryID, &storeID)
+	if err != nil {
+		return err
+	}
+	if active > 0 {
+		return ErrActiveOrders
+	}
 	return s.commerce.DeleteAssignment(nil, deliveryID, storeID)
 }
 

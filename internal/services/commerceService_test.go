@@ -16,7 +16,7 @@ import (
 func commerceTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db := testDB(t)
-	if err := db.AutoMigrate(&domain.Store{}, &domain.StorePincode{}, &domain.Category{}, &domain.Product{}, &domain.Inventory{}, &domain.Cart{}, &domain.CartItem{}, &domain.Order{}, &domain.OrderItem{}, &domain.DeliveryStoreAssignment{}); err != nil {
+	if err := db.AutoMigrate(&domain.Store{}, &domain.StorePincode{}, &domain.Category{}, &domain.Product{}, &domain.Inventory{}, &domain.Cart{}, &domain.CartItem{}, &domain.Order{}, &domain.OrderItem{}, &domain.OrderEvent{}, &domain.DeliveryStoreAssignment{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -62,12 +62,12 @@ func TestCatalogCartAndCODOrderFlow(t *testing.T) {
 
 	cart := NewCartService(db, catalogRepo, commerceRepo)
 	cartResponse, err := cart.AddItem(userID, dto.AddCartItemRequest{StoreID: storeID.String(), ProductID: productID.String(), Quantity: 2})
-	if err != nil || cartResponse.TotalAmount != 100 {
+	if err != nil || cartResponse.SubtotalAmount != 100 || cartResponse.TotalAmount != 100+2500+400 {
 		t.Fatalf("expected cart total, response=%+v err=%v", cartResponse, err)
 	}
 	orderService := NewOrderService(db, repository.NewAddressRepository(db), catalogRepo, commerceRepo)
-	order, err := orderService.Create(userID, address.ID)
-	if err != nil || order.Status != "pending" || order.PaymentMethod != "cod" || order.TotalAmount != 100 {
+	order, err := orderService.Create(userID, address.ID, "")
+	if err != nil || order.Status != "pending" || order.PaymentMethod != "cod" || order.TotalAmount != 3000 || order.SubtotalAmount != 100 {
 		t.Fatalf("expected pending COD order, order=%+v err=%v", order, err)
 	}
 	var inventory domain.Inventory
@@ -89,7 +89,7 @@ func TestCatalogCartAndCODOrderFlow(t *testing.T) {
 	if err != nil || accepted.Status != "accepted" {
 		t.Fatalf("expected accepted order, order=%+v err=%v", accepted, err)
 	}
-	completed, err := orderService.Complete(deliveryID, uuid.MustParse(order.ID))
+	completed, err := orderService.Complete(deliveryID, uuid.MustParse(order.ID), order.DeliveryCode)
 	if err != nil || completed.Status != "completed" || completed.PaymentStatus != "paid" {
 		t.Fatalf("expected completed COD order, order=%+v err=%v", completed, err)
 	}
@@ -155,7 +155,7 @@ func TestCartCannotMixStoresAndOrderAcceptIsSingleWinner(t *testing.T) {
 		t.Fatalf("expected one-store cart restriction, got %v", err)
 	}
 	orderService := NewOrderService(db, repository.NewAddressRepository(db), catalogRepo, commerceRepo)
-	order, err := orderService.Create(userID, address.ID)
+	order, err := orderService.Create(userID, address.ID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestRiderCanHoldOnlyOneActiveOrder(t *testing.T) {
 		t.Fatalf("expected one active order A, got %+v err=%v", active, err)
 	}
 	// After completing A, the rider can accept B.
-	if _, err := orderService.Complete(riderID, orderA); err != nil {
+	if _, err := orderService.Complete(riderID, orderA, ""); err != nil {
 		t.Fatalf("complete A: %v", err)
 	}
 	if _, err := orderService.Accept(riderID, orderB); err != nil {
@@ -349,7 +349,7 @@ func TestOrderRejectedWhenStoreDoesNotServeAddressPincode(t *testing.T) {
 		t.Fatal(err)
 	}
 	orders := NewOrderService(db, repository.NewAddressRepository(db), catalogRepo, commerceRepo)
-	if _, err := orders.Create(userID, address.ID); !errors.Is(err, ErrNotServiceable) {
+	if _, err := orders.Create(userID, address.ID, ""); !errors.Is(err, ErrNotServiceable) {
 		t.Fatalf("expected ErrNotServiceable, got %v", err)
 	}
 	var stock domain.Inventory

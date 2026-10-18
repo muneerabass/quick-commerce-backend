@@ -11,25 +11,31 @@ import (
 )
 
 type AppConfig struct {
-	HTTPPort            string
-	DatabaseURL         string
-	JWTSecret           string
-	OTPHashSecret       string
-	AccessTokenTTL      time.Duration
-	RefreshTokenTTL     time.Duration
-	OTPTTL              time.Duration
-	OTPResendAfter      time.Duration
-	OTPMaxAttempts      int
-	TwoFactorAPIKey     string
-	TwoFactorTemplate   string
-	TwoFactorBaseURL    string
-	AdminPhone          string
-	GoogleMapsAPIKey    string
-	GoogleMapsBaseURL   string
-	DevOTPLog           bool
-	CloudinaryCloudName string
-	CloudinaryAPIKey    string
-	CloudinaryAPISecret string
+	// Order rules. Fees are in paise; see services.OrderPolicy.
+	DeliveryFee           int
+	HandlingFee           int
+	FreeDeliveryThreshold int
+	OrderAcceptTimeout    time.Duration
+	StaleAcceptedAfter    time.Duration
+	HTTPPort              string
+	DatabaseURL           string
+	JWTSecret             string
+	OTPHashSecret         string
+	AccessTokenTTL        time.Duration
+	RefreshTokenTTL       time.Duration
+	OTPTTL                time.Duration
+	OTPResendAfter        time.Duration
+	OTPMaxAttempts        int
+	TwoFactorAPIKey       string
+	TwoFactorTemplate     string
+	TwoFactorBaseURL      string
+	AdminPhone            string
+	GoogleMapsAPIKey      string
+	GoogleMapsBaseURL     string
+	DevOTPLog             bool
+	CloudinaryCloudName   string
+	CloudinaryAPIKey      string
+	CloudinaryAPISecret   string
 }
 
 func LoadSettings() (AppConfig, error) {
@@ -64,25 +70,30 @@ func LoadSettings() (AppConfig, error) {
 	}
 
 	cfg := AppConfig{
-		HTTPPort:            httpPort,
-		DatabaseURL:         databaseURL,
-		JWTSecret:           jwtSecret,
-		OTPHashSecret:       otpHashSecret,
-		AccessTokenTTL:      durationFromEnv("ACCESS_TOKEN_TTL", 15*time.Minute),
-		RefreshTokenTTL:     durationFromEnv("REFRESH_TOKEN_TTL", 30*24*time.Hour),
-		OTPTTL:              durationFromEnv("OTP_TTL", 5*time.Minute),
-		OTPResendAfter:      durationFromEnv("OTP_RESEND_AFTER", 60*time.Second),
-		OTPMaxAttempts:      intFromEnv("OTP_MAX_ATTEMPTS", 5),
-		TwoFactorAPIKey:     os.Getenv("TWO_FACTOR_API_KEY"),
-		TwoFactorTemplate:   envOrDefault("TWO_FACTOR_TEMPLATE", "OTP1"),
-		TwoFactorBaseURL:    envOrDefault("TWO_FACTOR_BASE_URL", "https://2factor.in"),
-		AdminPhone:          os.Getenv("ADMIN_PHONE"),
-		GoogleMapsAPIKey:    envOrDefault("GOOGLE_MAPS_PLATFORM_KEY", os.Getenv("GOOGLE_MAPS_API_KEY")),
-		GoogleMapsBaseURL:   envOrDefault("GOOGLE_MAPS_BASE_URL", "https://maps.googleapis.com"),
-		DevOTPLog:           boolFromEnv("DEV_OTP_LOG", false),
-		CloudinaryCloudName: os.Getenv("CLOUDINARY_CLOUD_NAME"),
-		CloudinaryAPIKey:    os.Getenv("CLOUDINARY_API_KEY"),
-		CloudinaryAPISecret: os.Getenv("CLOUDINARY_API_SECRET"),
+		DeliveryFee:           nonNegativeIntFromEnv("DELIVERY_FEE", 2500),
+		HandlingFee:           nonNegativeIntFromEnv("HANDLING_FEE", 400),
+		FreeDeliveryThreshold: nonNegativeIntFromEnv("FREE_DELIVERY_THRESHOLD", 19900),
+		OrderAcceptTimeout:    durationFromEnv("ORDER_ACCEPT_TIMEOUT", 30*time.Minute),
+		StaleAcceptedAfter:    durationFromEnv("STALE_ACCEPTED_AFTER", 60*time.Minute),
+		HTTPPort:              httpPort,
+		DatabaseURL:           databaseURL,
+		JWTSecret:             jwtSecret,
+		OTPHashSecret:         otpHashSecret,
+		AccessTokenTTL:        durationFromEnv("ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:       durationFromEnv("REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		OTPTTL:                durationFromEnv("OTP_TTL", 5*time.Minute),
+		OTPResendAfter:        durationFromEnv("OTP_RESEND_AFTER", 60*time.Second),
+		OTPMaxAttempts:        intFromEnv("OTP_MAX_ATTEMPTS", 5),
+		TwoFactorAPIKey:       os.Getenv("TWO_FACTOR_API_KEY"),
+		TwoFactorTemplate:     envOrDefault("TWO_FACTOR_TEMPLATE", "OTP1"),
+		TwoFactorBaseURL:      envOrDefault("TWO_FACTOR_BASE_URL", "https://2factor.in"),
+		AdminPhone:            os.Getenv("ADMIN_PHONE"),
+		GoogleMapsAPIKey:      envOrDefault("GOOGLE_MAPS_PLATFORM_KEY", os.Getenv("GOOGLE_MAPS_API_KEY")),
+		GoogleMapsBaseURL:     envOrDefault("GOOGLE_MAPS_BASE_URL", "https://maps.googleapis.com"),
+		DevOTPLog:             boolFromEnv("DEV_OTP_LOG", false),
+		CloudinaryCloudName:   os.Getenv("CLOUDINARY_CLOUD_NAME"),
+		CloudinaryAPIKey:      os.Getenv("CLOUDINARY_API_KEY"),
+		CloudinaryAPISecret:   os.Getenv("CLOUDINARY_API_SECRET"),
 	}
 	return cfg, nil
 }
@@ -125,6 +136,19 @@ func intFromEnv(key string, fallback int) int {
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+// nonNegativeIntFromEnv is like intFromEnv but accepts 0 (e.g. "no delivery fee").
+func nonNegativeIntFromEnv(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
 		return fallback
 	}
 	return parsed

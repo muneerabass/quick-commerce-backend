@@ -294,6 +294,18 @@ func serviceError(c *fiber.Ctx, err error) error {
 		return writeErrorCode(c, fiber.StatusNotFound, "not_found", "resource not found")
 	case errors.Is(err, services.ErrNotServiceable):
 		return writeErrorCode(c, fiber.StatusUnprocessableEntity, "not_serviceable", err.Error())
+	case errors.Is(err, services.ErrOrderNotCancellable):
+		return writeErrorCode(c, fiber.StatusConflict, "order_not_cancellable", err.Error())
+	case errors.Is(err, services.ErrDeliveryCodeLocked):
+		return writeErrorCode(c, fiber.StatusConflict, "delivery_code_locked", err.Error())
+	case errors.Is(err, services.ErrActiveOrders):
+		return writeErrorCode(c, fiber.StatusConflict, "active_orders", err.Error())
+	case isInvalidDeliveryCode(err):
+		return writeErrorCode(c, fiber.StatusUnprocessableEntity, "invalid_delivery_code", err.Error())
+	case isCartUnavailable(err):
+		var unavailable *services.CartUnavailableError
+		errors.As(err, &unavailable)
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": err.Error(), "code": "cart_unavailable", "details": unavailable.Issues})
 	case errors.Is(err, services.ErrCartStoreMismatch):
 		return writeErrorCode(c, fiber.StatusConflict, "cart_store_mismatch", err.Error())
 	case errors.Is(err, services.ErrInsufficientStock):
@@ -364,4 +376,14 @@ func JSONErrorHandler(c *fiber.Ctx, err error) error {
 		return writeError(c, fiberErr.Code, message)
 	}
 	return serviceError(c, err)
+}
+
+func isInvalidDeliveryCode(err error) bool {
+	var target *services.InvalidDeliveryCodeError
+	return errors.As(err, &target)
+}
+
+func isCartUnavailable(err error) bool {
+	var target *services.CartUnavailableError
+	return errors.As(err, &target)
 }

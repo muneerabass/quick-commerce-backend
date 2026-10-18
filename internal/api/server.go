@@ -1,11 +1,15 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"quick-commerce/configs"
 	"quick-commerce/internal/api/rest"
 	"quick-commerce/internal/api/rest/handlers"
 	"quick-commerce/internal/migrations"
+	"quick-commerce/internal/repository"
+	"quick-commerce/internal/services"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -39,6 +43,14 @@ func StartServer(config *configs.AppConfig) error {
 	app.Get("/healthz", func(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "ok"})
 	})
+
+	services.SetOrderPolicy(services.OrderPolicy{
+		DeliveryFee: config.DeliveryFee, HandlingFee: config.HandlingFee, FreeDeliveryThreshold: config.FreeDeliveryThreshold,
+		AcceptTimeout: config.OrderAcceptTimeout, StaleAcceptedAfter: config.StaleAcceptedAfter,
+	})
+	sweeperCtx, stopSweeper := context.WithCancel(context.Background())
+	defer stopSweeper()
+	services.StartOrderSweeper(sweeperCtx, services.NewOrderService(db, repository.NewAddressRepository(db), repository.NewCatalogRepository(db), repository.NewCommerceRepository(db)), time.Minute)
 
 	SetupRoutes(rh, *config)
 	// Registered last so unknown routes get a JSON 404 instead of plain text.
