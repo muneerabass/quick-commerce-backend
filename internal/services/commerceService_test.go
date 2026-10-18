@@ -16,7 +16,7 @@ import (
 func commerceTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db := testDB(t)
-	if err := db.AutoMigrate(&domain.Store{}, &domain.Category{}, &domain.Product{}, &domain.Inventory{}, &domain.Cart{}, &domain.CartItem{}, &domain.Order{}, &domain.OrderItem{}, &domain.DeliveryStoreAssignment{}); err != nil {
+	if err := db.AutoMigrate(&domain.Store{}, &domain.StorePincode{}, &domain.Category{}, &domain.Product{}, &domain.Inventory{}, &domain.Cart{}, &domain.CartItem{}, &domain.Order{}, &domain.OrderItem{}, &domain.DeliveryStoreAssignment{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -35,11 +35,13 @@ func TestCatalogCartAndCODOrderFlow(t *testing.T) {
 	if err := db.Create(&domain.User{ID: deliveryID, Phone: "+919876543231", Role: "delivery", Status: "active", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
-	latitude, longitude := 19.076, 72.8777
-	if err := db.Create(&domain.Store{ID: storeID, Name: "Central Store", Address: "Mumbai", Latitude: &latitude, Longitude: &longitude, IsActive: true, CreatedAt: now}).Error; err != nil {
+	if err := db.Create(&domain.Store{ID: storeID, Name: "Central Store", Address: "Mumbai", IsActive: true, CreatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&domain.Product{ID: productID, Name: "Milk", Price: 50, CreatedAt: now}).Error; err != nil {
+	if err := db.Create(&domain.StorePincode{StoreID: storeID, Pincode: "400001", CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&domain.Product{ID: productID, StoreID: storeID, Name: "Milk", Price: 50, CreatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&domain.Inventory{ID: uuid.New(), StoreID: storeID, ProductID: productID, Quantity: 3, UpdatedAt: now}).Error; err != nil {
@@ -53,9 +55,9 @@ func TestCatalogCartAndCODOrderFlow(t *testing.T) {
 	catalogRepo := repository.NewCatalogRepository(db)
 	commerceRepo := repository.NewCommerceRepository(db)
 	catalog := NewCatalogService(catalogRepo)
-	nearby, err := catalog.Nearby(latitude, longitude, 1)
-	if err != nil || len(nearby) != 1 || len(nearby[0].Products) != 1 {
-		t.Fatalf("expected nearby product, response=%+v err=%v", nearby, err)
+	home, err := catalog.ProductsForPincode("400001")
+	if err != nil || !home.Serviceable || len(home.Products) != 1 || home.Products[0].StoreName != "Central Store" {
+		t.Fatalf("expected pincode product labelled with its store, response=%+v err=%v", home, err)
 	}
 
 	cart := NewCartService(db, catalogRepo, commerceRepo)
@@ -110,12 +112,10 @@ func TestCartCannotMixStoresAndOrderAcceptIsSingleWinner(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	firstLat, firstLon := 12.9, 77.6
 	secondStoreID := uuid.New()
-	secondLat, secondLon := 12.91, 77.61
 	for _, store := range []*domain.Store{
-		{ID: storeID, Name: "One", Address: "A", Latitude: &firstLat, Longitude: &firstLon, IsActive: true, CreatedAt: now},
-		{ID: secondStoreID, Name: "Two", Address: "B", Latitude: &secondLat, Longitude: &secondLon, IsActive: true, CreatedAt: now},
+		{ID: storeID, Name: "One", Address: "A", IsActive: true, CreatedAt: now},
+		{ID: secondStoreID, Name: "Two", Address: "B", IsActive: true, CreatedAt: now},
 	} {
 		if err := db.Create(store).Error; err != nil {
 			t.Fatal(err)
@@ -123,8 +123,8 @@ func TestCartCannotMixStoresAndOrderAcceptIsSingleWinner(t *testing.T) {
 	}
 	secondProductID := uuid.New()
 	for _, product := range []*domain.Product{
-		{ID: productID, Name: "A", Price: 10, CreatedAt: now},
-		{ID: secondProductID, Name: "B", Price: 20, CreatedAt: now},
+		{ID: productID, StoreID: storeID, Name: "A", Price: 10, CreatedAt: now},
+		{ID: secondProductID, StoreID: secondStoreID, Name: "B", Price: 20, CreatedAt: now},
 	} {
 		if err := db.Create(product).Error; err != nil {
 			t.Fatal(err)
@@ -137,6 +137,9 @@ func TestCartCannotMixStoresAndOrderAcceptIsSingleWinner(t *testing.T) {
 		if err := db.Create(inventory).Error; err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := db.Create(&domain.StorePincode{StoreID: storeID, Pincode: "560001", CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
 	}
 	address := &domain.UserAddress{ID: uuid.New(), UserID: userID, Label: "Home", RecipientName: "Customer", Phone: "+919876543232", AddressLine1: "1 Main Road", City: "Bengaluru", State: "KA", Pincode: "560001", IsDefault: true, CreatedAt: now, UpdatedAt: now}
 	if err := db.Create(address).Error; err != nil {
@@ -184,8 +187,7 @@ func TestRiderCanHoldOnlyOneActiveOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	lat, lon := 12.9, 77.6
-	if err := db.Create(&domain.Store{ID: storeID, Name: "One", Address: "A", Latitude: &lat, Longitude: &lon, IsActive: true, CreatedAt: now}).Error; err != nil {
+	if err := db.Create(&domain.Store{ID: storeID, Name: "One", Address: "A", IsActive: true, CreatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
 	commerceRepo := repository.NewCommerceRepository(db)
@@ -225,5 +227,168 @@ func TestRiderCanHoldOnlyOneActiveOrder(t *testing.T) {
 	history, err := orderService.MineForDelivery(riderID, "completed")
 	if err != nil || len(history) != 1 || history[0].ID != orderA.String() {
 		t.Fatalf("expected A in completed history, got %+v err=%v", history, err)
+	}
+}
+
+func seedPincodeStore(t *testing.T, db *gorm.DB, name string, active bool, pincodes ...string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	now := time.Now().UTC()
+	if err := db.Create(&domain.Store{ID: id, Name: name, Address: name + " address", IsActive: true, CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !active {
+		if err := db.Model(&domain.Store{}).Where("id = ?", id).Update("is_active", false).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, pincode := range pincodes {
+		if err := db.Create(&domain.StorePincode{StoreID: id, Pincode: pincode, CreatedAt: now}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	return id
+}
+
+func seedStockedProduct(t *testing.T, db *gorm.DB, storeID uuid.UUID, name string, quantity int) {
+	t.Helper()
+	now := time.Now().UTC()
+	product := domain.Product{ID: uuid.New(), StoreID: storeID, Name: name, Price: 10, CreatedAt: now}
+	if err := db.Create(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&domain.Inventory{ID: uuid.New(), StoreID: storeID, ProductID: product.ID, Quantity: quantity, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPincodeCatalogIsUnionOfServingStores(t *testing.T) {
+	db := commerceTestDB(t)
+	a := seedPincodeStore(t, db, "Store A", true, "560001", "560002")
+	b := seedPincodeStore(t, db, "Store B", true, "560001")
+	c := seedPincodeStore(t, db, "Store C", true, "560001", "560003")
+	inactive := seedPincodeStore(t, db, "Store Closed", false, "560001")
+	far := seedPincodeStore(t, db, "Store Far", true, "700001")
+	seedStockedProduct(t, db, a, "Apples", 5)
+	seedStockedProduct(t, db, b, "Bread", 5)
+	seedStockedProduct(t, db, c, "Curd", 5)
+	seedStockedProduct(t, db, c, "Out of stock", 0)
+	seedStockedProduct(t, db, inactive, "Hidden", 5)
+	seedStockedProduct(t, db, far, "Faraway", 5)
+
+	catalog := NewCatalogService(repository.NewCatalogRepository(db))
+	home, err := catalog.ProductsForPincode(" 560001 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !home.Serviceable || len(home.Stores) != 3 {
+		t.Fatalf("expected 3 serving stores, got %+v", home.Stores)
+	}
+	names := map[string]string{}
+	for _, product := range home.Products {
+		names[product.Name] = product.StoreName
+	}
+	want := map[string]string{"Apples": "Store A", "Bread": "Store B", "Curd": "Store C"}
+	if len(names) != len(want) {
+		t.Fatalf("expected union %v, got %v", want, names)
+	}
+	for name, store := range want {
+		if names[name] != store {
+			t.Fatalf("product %s should be labelled %s, got %q", name, store, names[name])
+		}
+	}
+
+	only, err := catalog.ProductsForPincode("560002")
+	if err != nil || len(only.Products) != 1 || only.Products[0].Name != "Apples" {
+		t.Fatalf("expected only Store A product for 560002, got %+v err=%v", only, err)
+	}
+}
+
+func TestPincodeCatalogStates(t *testing.T) {
+	db := commerceTestDB(t)
+	empty := seedPincodeStore(t, db, "Empty Store", true, "560010")
+	_ = empty
+	catalog := NewCatalogService(repository.NewCatalogRepository(db))
+
+	notServed, err := catalog.ProductsForPincode("999999")
+	if err != nil || notServed.Serviceable || len(notServed.Products) != 0 || notServed.Products == nil {
+		t.Fatalf("unserved pincode should be a non-error empty response, got %+v err=%v", notServed, err)
+	}
+	served, err := catalog.ProductsForPincode("560010")
+	if err != nil || !served.Serviceable || len(served.Products) != 0 {
+		t.Fatalf("served pincode without stock should be serviceable and empty, got %+v err=%v", served, err)
+	}
+	for _, bad := range []string{"", "abc", "12"} {
+		if _, err := catalog.ProductsForPincode(bad); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("pincode %q should be invalid, got %v", bad, err)
+		}
+	}
+}
+
+func TestOrderRejectedWhenStoreDoesNotServeAddressPincode(t *testing.T) {
+	db := commerceTestDB(t)
+	now := time.Now().UTC()
+	userID := uuid.New()
+	if err := db.Create(&domain.User{ID: userID, Phone: "+919876543250", Role: "customer", Status: "active", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	storeID := seedPincodeStore(t, db, "Local", true, "560001")
+	seedStockedProduct(t, db, storeID, "Milk", 5)
+	var product domain.Product
+	if err := db.Where("store_id = ?", storeID).First(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	address := &domain.UserAddress{ID: uuid.New(), UserID: userID, Label: "Home", RecipientName: "C", Phone: "+919876543250", AddressLine1: "1 Rd", City: "Delhi", State: "DL", Pincode: "110001", IsDefault: true, CreatedAt: now, UpdatedAt: now}
+	if err := db.Create(address).Error; err != nil {
+		t.Fatal(err)
+	}
+	catalogRepo := repository.NewCatalogRepository(db)
+	commerceRepo := repository.NewCommerceRepository(db)
+	cart := NewCartService(db, catalogRepo, commerceRepo)
+	if _, err := cart.AddItem(userID, dto.AddCartItemRequest{StoreID: storeID.String(), ProductID: product.ID.String(), Quantity: 1}); err != nil {
+		t.Fatal(err)
+	}
+	orders := NewOrderService(db, repository.NewAddressRepository(db), catalogRepo, commerceRepo)
+	if _, err := orders.Create(userID, address.ID); !errors.Is(err, ErrNotServiceable) {
+		t.Fatalf("expected ErrNotServiceable, got %v", err)
+	}
+	var stock domain.Inventory
+	if err := db.Where("store_id = ?", storeID).First(&stock).Error; err != nil || stock.Quantity != 5 {
+		t.Fatalf("stock must be untouched by a rejected order, qty=%d err=%v", stock.Quantity, err)
+	}
+}
+
+func TestAdminStorePincodes(t *testing.T) {
+	db := commerceTestDB(t)
+	admin := NewAdminService(db, repository.NewUserRepository(db), repository.NewCatalogRepository(db), repository.NewCommerceRepository(db))
+
+	if _, err := admin.CreateStore(dto.StoreRequest{Name: "S", Address: "A"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("a store with no pincodes must be rejected, got %v", err)
+	}
+	if _, err := admin.CreateStore(dto.StoreRequest{Name: "S", Address: "A", Pincodes: []string{"56"}}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("a malformed pincode must be rejected, got %v", err)
+	}
+	store, err := admin.CreateStore(dto.StoreRequest{Name: "S", Address: "A", Pincodes: []string{"560001", " 560001 ", "560002"}})
+	if err != nil || len(store.Pincodes) != 2 {
+		t.Fatalf("expected de-duplicated pincodes, got %+v err=%v", store, err)
+	}
+	id := uuid.MustParse(store.ID)
+	replacement := []string{"110001"}
+	updated, err := admin.UpdateStore(id, dto.StorePatchRequest{Pincodes: &replacement})
+	if err != nil || len(updated.Pincodes) != 1 || updated.Pincodes[0] != "110001" {
+		t.Fatalf("expected pincodes replaced, got %+v err=%v", updated, err)
+	}
+	name := "Renamed"
+	renamed, err := admin.UpdateStore(id, dto.StorePatchRequest{Name: &name})
+	if err != nil || len(renamed.Pincodes) != 1 {
+		t.Fatalf("renaming must keep pincodes, got %+v err=%v", renamed, err)
+	}
+	empty := []string{}
+	if _, err := admin.UpdateStore(id, dto.StorePatchRequest{Pincodes: &empty}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("clearing every pincode must be rejected, got %v", err)
+	}
+	listed, err := admin.ListStores()
+	if err != nil || len(listed) != 1 || len(listed[0].Pincodes) != 1 {
+		t.Fatalf("list should include pincodes, got %+v err=%v", listed, err)
 	}
 }

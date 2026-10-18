@@ -14,6 +14,16 @@ type Store struct {
 	Longitude *float64  `json:"longitude,omitempty"`
 	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
+	// Pincodes are the postal codes this store delivers to. They live in the
+	// store_pincodes table and are loaded separately.
+	Pincodes []string `json:"pincodes" gorm:"-"`
+}
+
+// StorePincode marks a pincode as serviceable by a store.
+type StorePincode struct {
+	StoreID   uuid.UUID `gorm:"type:uuid;primaryKey"`
+	Pincode   string    `gorm:"primaryKey"`
+	CreatedAt time.Time
 }
 
 type Category struct {
@@ -35,16 +45,18 @@ type Product struct {
 }
 
 type ProductInventory struct {
-	ID          uuid.UUID  `json:"id"`
-	StoreID     uuid.UUID  `json:"store_id"`
-	Name        string     `json:"name"`
-	Description *string    `json:"description,omitempty"`
-	Price       int        `json:"price"`
-	ImageURL    *string    `json:"image_url,omitempty"`
-	Images      []string   `json:"images" gorm:"serializer:json"`
-	CategoryID  *uuid.UUID `json:"category_id,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	Quantity    int        `json:"quantity"`
+	ID           uuid.UUID  `json:"id"`
+	StoreID      uuid.UUID  `json:"store_id"`
+	Name         string     `json:"name"`
+	Description  *string    `json:"description,omitempty"`
+	Price        int        `json:"price"`
+	ImageURL     *string    `json:"image_url,omitempty"`
+	Images       []string   `json:"images" gorm:"serializer:json"`
+	CategoryID   *uuid.UUID `json:"category_id,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	Quantity     int        `json:"quantity"`
+	StoreName    string     `json:"store_name"`
+	CategoryName *string    `json:"category_name,omitempty"`
 }
 
 type Inventory struct {

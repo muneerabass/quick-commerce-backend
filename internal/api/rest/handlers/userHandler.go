@@ -3,12 +3,14 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log"
 	"quick-commerce/configs"
 	"quick-commerce/internal/api/middleware"
 	"quick-commerce/internal/api/rest"
 	"quick-commerce/internal/dto"
 	"quick-commerce/internal/repository"
 	"quick-commerce/internal/services"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -288,7 +290,20 @@ func requestIDs(c *fiber.Ctx) (uuid.UUID, uuid.UUID, error) {
 
 func serviceError(c *fiber.Ctx, err error) error {
 	switch {
-	case errors.Is(err, services.ErrInvalidInput), errors.Is(err, services.ErrInvalidPhone), errors.Is(err, services.ErrInvalidOTP), errors.Is(err, services.ErrOTPExpired), errors.Is(err, services.ErrOTPAttemptsExceeded), errors.Is(err, services.ErrInvalidRefreshToken), errors.Is(err, services.ErrSessionRevoked), errors.Is(err, services.ErrCartStoreMismatch), errors.Is(err, services.ErrEmptyCart), errors.Is(err, services.ErrInsufficientStock), errors.Is(err, services.ErrInvalidRole), errors.Is(err, repository.ErrNotFound):
+	case errors.Is(err, repository.ErrNotFound), errors.Is(err, gorm.ErrRecordNotFound):
+		return writeErrorCode(c, fiber.StatusNotFound, "not_found", "resource not found")
+	case errors.Is(err, services.ErrNotServiceable):
+		return writeErrorCode(c, fiber.StatusUnprocessableEntity, "not_serviceable", err.Error())
+	case errors.Is(err, services.ErrCartStoreMismatch):
+		return writeErrorCode(c, fiber.StatusConflict, "cart_store_mismatch", err.Error())
+	case errors.Is(err, services.ErrInsufficientStock):
+		return writeErrorCode(c, fiber.StatusConflict, "insufficient_stock", err.Error())
+	case errors.Is(err, services.ErrEmptyCart):
+		return writeErrorCode(c, fiber.StatusBadRequest, "empty_cart", err.Error())
+	case errors.Is(err, services.ErrInvalidInput):
+		// "invalid input: " is an internal prefix; clients get just the reason.
+		return writeError(c, fiber.StatusBadRequest, strings.TrimPrefix(err.Error(), services.ErrInvalidInput.Error()+": "))
+	case errors.Is(err, services.ErrInvalidPhone), errors.Is(err, services.ErrInvalidOTP), errors.Is(err, services.ErrOTPExpired), errors.Is(err, services.ErrOTPAttemptsExceeded), errors.Is(err, services.ErrInvalidRefreshToken), errors.Is(err, services.ErrSessionRevoked), errors.Is(err, services.ErrInvalidRole):
 		return writeError(c, fiber.StatusBadRequest, err.Error())
 	case errors.Is(err, repository.ErrOrderUnavailable), errors.Is(err, repository.ErrRiderBusy), errors.Is(err, gorm.ErrDuplicatedKey):
 		return writeError(c, fiber.StatusConflict, err.Error())
@@ -300,15 +315,53 @@ func serviceError(c *fiber.Ctx, err error) error {
 		return writeError(c, fiber.StatusServiceUnavailable, "Google Maps geocoding is unavailable")
 	case errors.Is(err, services.ErrOTPProvider):
 		return writeError(c, fiber.StatusServiceUnavailable, "OTP provider is not configured")
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		return writeError(c, fiber.StatusNotFound, "resource not found")
 	case errors.Is(err, services.ErrAccountDeleted):
 		return writeError(c, fiber.StatusGone, err.Error())
 	default:
-		return writeError(c, fiber.StatusInternalServerError, "internal server error")
+		log.Printf("unhandled error on %s %s: %v", c.Method(), c.Path(), err)
+		return writeError(c, fiber.StatusInternalServerError, "something went wrong, please try again")
 	}
 }
 
+// errorCodes gives every status a stable machine-readable code so clients can
+// branch on `code` instead of parsing messages.
+var errorCodes = map[int]string{
+	fiber.StatusBadRequest:            "invalid_input",
+	fiber.StatusUnauthorized:          "unauthorized",
+	fiber.StatusForbidden:             "forbidden",
+	fiber.StatusNotFound:              "not_found",
+	fiber.StatusMethodNotAllowed:      "method_not_allowed",
+	fiber.StatusConflict:              "conflict",
+	fiber.StatusGone:                  "gone",
+	fiber.StatusRequestEntityTooLarge: "payload_too_large",
+	fiber.StatusUnprocessableEntity:   "unprocessable",
+	fiber.StatusTooManyRequests:       "rate_limited",
+	fiber.StatusInternalServerError:   "internal",
+	fiber.StatusServiceUnavailable:    "unavailable",
+}
+
 func writeError(c *fiber.Ctx, status int, message string) error {
-	return c.Status(status).JSON(fiber.Map{"error": message})
+	code := errorCodes[status]
+	if code == "" {
+		code = "error"
+	}
+	return writeErrorCode(c, status, code, message)
+}
+
+func writeErrorCode(c *fiber.Ctx, status int, code, message string) error {
+	return c.Status(status).JSON(fiber.Map{"error": message, "code": code})
+}
+
+// JSONErrorHandler turns any error that escapes a handler (unknown route,
+// oversized body, panic recovered upstream) into the standard JSON shape.
+func JSONErrorHandler(c *fiber.Ctx, err error) error {
+	var fiberErr *fiber.Error
+	if errors.As(err, &fiberErr) {
+		message := fiberErr.Message
+		if fiberErr.Code == fiber.StatusRequestEntityTooLarge {
+			message = "request is too large"
+		}
+		return writeError(c, fiberErr.Code, message)
+	}
+	return serviceError(c, err)
 }

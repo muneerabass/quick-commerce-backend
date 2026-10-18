@@ -3,13 +3,11 @@ package dto
 import "time"
 
 type StoreResponse struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	Address    string   `json:"address"`
-	Latitude   *float64 `json:"latitude,omitempty"`
-	Longitude  *float64 `json:"longitude,omitempty"`
-	IsActive   bool     `json:"is_active"`
-	DistanceKM float64  `json:"distance_km,omitempty"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Address  string   `json:"address"`
+	Pincodes []string `json:"pincodes"`
+	IsActive bool     `json:"is_active"`
 }
 
 type CatalogProductResponse struct {
@@ -21,26 +19,41 @@ type CatalogProductResponse struct {
 	ImageURL    *string  `json:"image_url,omitempty"`
 	Images      []string `json:"images"`
 	CategoryID  *string  `json:"category_id,omitempty"`
-	Quantity    int      `json:"quantity"`
+	// CategoryName and StoreName let clients label a product without extra
+	// lookups; a pincode catalog mixes products from several stores.
+	CategoryName *string `json:"category_name,omitempty"`
+	StoreName    string  `json:"store_name"`
+	Quantity     int     `json:"quantity"`
 }
 
-type NearbyStoreResponse struct {
-	Store    StoreResponse            `json:"store"`
-	Products []CatalogProductResponse `json:"products"`
+// PincodeCatalogResponse is the home-screen catalog for one pincode: the union
+// of in-stock products across every active store serving it.
+type PincodeCatalogResponse struct {
+	Pincode     string                   `json:"pincode"`
+	Serviceable bool                     `json:"serviceable"`
+	Stores      []StoreSummary           `json:"stores"`
+	Products    []CatalogProductResponse `json:"products"`
+}
+
+type StoreSummary struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type CartItemResponse struct {
-	ID          string `json:"id"`
-	ProductID   string `json:"product_id"`
-	ProductName string `json:"product_name"`
-	UnitPrice   int    `json:"unit_price"`
-	Quantity    int    `json:"quantity"`
-	LineTotal   int    `json:"line_total"`
+	ID          string  `json:"id"`
+	ProductID   string  `json:"product_id"`
+	ProductName string  `json:"product_name"`
+	ImageURL    *string `json:"image_url,omitempty"`
+	UnitPrice   int     `json:"unit_price"`
+	Quantity    int     `json:"quantity"`
+	LineTotal   int     `json:"line_total"`
 }
 
 type CartResponse struct {
 	ID          string             `json:"id"`
 	StoreID     *string            `json:"store_id,omitempty"`
+	StoreName   *string            `json:"store_name,omitempty"`
 	Items       []CartItemResponse `json:"items"`
 	TotalAmount int                `json:"total_amount"`
 }
@@ -56,6 +69,7 @@ type OrderItemResponse struct {
 type OrderResponse struct {
 	ID            string              `json:"id"`
 	StoreID       string              `json:"store_id"`
+	StoreName     string              `json:"store_name,omitempty"`
 	Status        string              `json:"status"`
 	PaymentMethod string              `json:"payment_method"`
 	PaymentStatus string              `json:"payment_status"`

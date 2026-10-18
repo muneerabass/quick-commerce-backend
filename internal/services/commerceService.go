@@ -43,11 +43,19 @@ func (s *CartService) AddItem(userID uuid.UUID, request dto.AddCartItemRequest) 
 	if request.Quantity <= 0 {
 		return dto.CartResponse{}, fmt.Errorf("%w: quantity must be greater than zero", ErrInvalidInput)
 	}
-	if _, err := s.catalog.FindStore(nil, storeID); err != nil {
+	store, err := s.catalog.FindStore(nil, storeID)
+	if err != nil {
 		return dto.CartResponse{}, err
 	}
-	if _, err := s.catalog.FindProduct(nil, productID); err != nil {
+	if !store.IsActive {
+		return dto.CartResponse{}, fmt.Errorf("%w: this store is currently unavailable", ErrInvalidInput)
+	}
+	product, err := s.catalog.FindProduct(nil, productID)
+	if err != nil {
 		return dto.CartResponse{}, err
+	}
+	if product.StoreID != storeID {
+		return dto.CartResponse{}, repository.ErrNotFound
 	}
 	var cart *domain.Cart
 	err = s.db.Transaction(func(tx *gorm.DB) error {
@@ -187,6 +195,9 @@ func (s *CartService) mapCart(cart *domain.Cart) (dto.CartResponse, error) {
 	if cart.StoreID != nil {
 		storeID := cart.StoreID.String()
 		response.StoreID = &storeID
+		if store, err := s.catalog.FindStore(nil, *cart.StoreID); err == nil {
+			response.StoreName = &store.Name
+		}
 	}
 	for _, item := range items {
 		product, err := s.catalog.FindProduct(nil, item.ProductID)
@@ -195,7 +206,7 @@ func (s *CartService) mapCart(cart *domain.Cart) (dto.CartResponse, error) {
 		}
 		lineTotal := product.Price * item.Quantity
 		response.TotalAmount += lineTotal
-		response.Items = append(response.Items, dto.CartItemResponse{ID: item.ID.String(), ProductID: product.ID.String(), ProductName: product.Name, UnitPrice: product.Price, Quantity: item.Quantity, LineTotal: lineTotal})
+		response.Items = append(response.Items, dto.CartItemResponse{ID: item.ID.String(), ProductID: product.ID.String(), ProductName: product.Name, ImageURL: product.ImageURL, UnitPrice: product.Price, Quantity: item.Quantity, LineTotal: lineTotal})
 	}
 	return response, nil
 }
@@ -238,6 +249,13 @@ func (s *OrderService) Create(userID, addressID uuid.UUID) (dto.OrderResponse, e
 		}
 		if !store.IsActive {
 			return fmt.Errorf("%w: store is inactive", ErrInvalidInput)
+		}
+		serves, err := s.catalog.StoreServesPincode(tx, store.ID, address.Pincode)
+		if err != nil {
+			return err
+		}
+		if !serves {
+			return &NotServiceableError{Store: store.Name, Pincode: address.Pincode}
 		}
 		order = &domain.Order{ID: uuid.New(), UserID: userID, StoreID: *cart.StoreID, Status: "pending", PaymentMethod: "cod", PaymentStatus: "pending", RecipientName: address.RecipientName, DeliveryPhone: address.Phone, AddressLine1: address.AddressLine1, AddressLine2: address.AddressLine2, Landmark: address.Landmark, City: address.City, State: address.State, Pincode: address.Pincode, Latitude: address.Latitude, Longitude: address.Longitude, DeliveryInstructions: address.DeliveryInstructions, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 		orderItems := make([]domain.OrderItem, 0, len(items))
@@ -388,6 +406,9 @@ func (s *OrderService) mapOrder(order *domain.Order) (dto.OrderResponse, error) 
 		return dto.OrderResponse{}, err
 	}
 	response := dto.OrderResponse{ID: order.ID.String(), StoreID: order.StoreID.String(), Status: order.Status, PaymentMethod: order.PaymentMethod, PaymentStatus: order.PaymentStatus, TotalAmount: order.TotalAmount, RecipientName: order.RecipientName, DeliveryPhone: order.DeliveryPhone, AddressLine1: order.AddressLine1, AddressLine2: order.AddressLine2, Landmark: order.Landmark, City: order.City, State: order.State, Pincode: order.Pincode, Latitude: order.Latitude, Longitude: order.Longitude, AcceptedAt: order.AcceptedAt, CompletedAt: order.CompletedAt, CreatedAt: order.CreatedAt, UpdatedAt: order.UpdatedAt, Items: make([]dto.OrderItemResponse, 0, len(items))}
+	if store, err := s.catalog.FindStore(nil, order.StoreID); err == nil {
+		response.StoreName = store.Name
+	}
 	if order.AcceptedBy != nil {
 		value := order.AcceptedBy.String()
 		response.AcceptedBy = &value

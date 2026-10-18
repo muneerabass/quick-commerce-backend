@@ -79,9 +79,26 @@ func main() {
 	}
 
 	// Store
-	store, err := upsertStoreByName(db, "Dev Mart", "MG Road, Bengaluru", 12.9716, 77.5946, now)
+	store, err := upsertStoreByName(db, "Dev Mart", "MG Road, Bengaluru", []string{"560001", "560002", "560003"}, now)
 	if err != nil {
 		log.Fatalf("store: %v", err)
+	}
+	// A second store sharing 560001 so the pincode catalog shows a union.
+	freshBasket, err := upsertStoreByName(db, "Fresh Basket", "Indiranagar, Bengaluru", []string{"560001", "560038"}, now)
+	if err != nil {
+		log.Fatalf("store: %v", err)
+	}
+	for _, p := range []productSeed{
+		{"Bananas 1 dozen", "Ripe yellow bananas, 12 pcs", 6000, "Grocery", "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?w=600", 40},
+		{"Sparkling Water 1L", "Chilled sparkling water", 4000, "Beverages", "https://images.unsplash.com/photo-1523362628745-0c100150b504?w=600", 60},
+	} {
+		product, err := upsertProductByName(db, freshBasket.ID, p.Name, p.Description, p.PricePaise, p.ImageURL, categoryByNameEarly(grocery.ID, beverages.ID, p.Category), now)
+		if err != nil {
+			log.Fatalf("product %s: %v", p.Name, err)
+		}
+		if err := upsertInventory(db, freshBasket.ID, product.ID, p.StockQty, now); err != nil {
+			log.Fatalf("inventory %s: %v", p.Name, err)
+		}
 	}
 
 	// Products with image URLs
@@ -151,16 +168,27 @@ func upsertCategoryByName(db *gorm.DB, name string, now time.Time) (*domain.Cate
 	return &cat, nil
 }
 
-func upsertStoreByName(db *gorm.DB, name, address string, lat, lng float64, now time.Time) (*domain.Store, error) {
+func categoryByNameEarly(grocery, beverages uuid.UUID, name string) uuid.UUID {
+	if name == "Beverages" {
+		return beverages
+	}
+	return grocery
+}
+
+func upsertStoreByName(db *gorm.DB, name, address string, pincodes []string, now time.Time) (*domain.Store, error) {
 	var store domain.Store
 	err := db.Where("name = ?", name).First(&store).Error
-	if err == nil {
-		return &store, nil
+	if err != nil {
+		store = domain.Store{ID: uuid.New(), Name: name, Address: address, IsActive: true, CreatedAt: now}
+		if err := db.Create(&store).Error; err != nil {
+			return nil, err
+		}
 	}
-	latCopy, lngCopy := lat, lng
-	store = domain.Store{ID: uuid.New(), Name: name, Address: address, Latitude: &latCopy, Longitude: &lngCopy, IsActive: true, CreatedAt: now}
-	if err := db.Create(&store).Error; err != nil {
-		return nil, err
+	for _, pincode := range pincodes {
+		row := domain.StorePincode{StoreID: store.ID, Pincode: pincode, CreatedAt: now}
+		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+			return nil, err
+		}
 	}
 	return &store, nil
 }

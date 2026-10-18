@@ -3,7 +3,6 @@ package services
 import (
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -21,7 +20,18 @@ var (
 	ErrInsufficientStock = errors.New("insufficient stock")
 	ErrEmptyCart         = errors.New("cart is empty")
 	ErrInvalidOrderState = errors.New("order is not in the required state")
+	ErrNotServiceable    = errors.New("this store does not deliver to the selected pincode")
 )
+
+// NotServiceableError carries which store and pincode failed so the message can
+// name them. It matches ErrNotServiceable under errors.Is.
+type NotServiceableError struct{ Store, Pincode string }
+
+func (e *NotServiceableError) Error() string {
+	return fmt.Sprintf("%s doesn't deliver to %s. Choose a different address or pincode.", e.Store, e.Pincode)
+}
+
+func (e *NotServiceableError) Is(target error) bool { return target == ErrNotServiceable }
 
 type CatalogService struct {
 	catalog repository.CatalogRepository
@@ -31,53 +41,44 @@ func NewCatalogService(catalog repository.CatalogRepository) *CatalogService {
 	return &CatalogService{catalog: catalog}
 }
 
-func (s *CatalogService) Nearby(latitude, longitude, radiusKM float64) ([]dto.NearbyStoreResponse, error) {
-	if err := validateCoordinates(latitude, longitude); err != nil {
-		return nil, err
-	}
-	if radiusKM <= 0 || radiusKM > 100 {
-		return nil, fmt.Errorf("%w: radius must be between 0 and 100 km", ErrInvalidInput)
-	}
-	stores, err := s.catalog.ListActiveStores(nil)
+// ProductsForPincode builds the home catalog for a pincode: the union of
+// in-stock products across every active store that serves it. A pincode no
+// store serves is not an error; it returns serviceable=false so clients can show
+// a dedicated "we're not here yet" state.
+func (s *CatalogService) ProductsForPincode(pincode string) (dto.PincodeCatalogResponse, error) {
+	pincode, err := normalizePincode(pincode)
 	if err != nil {
-		return nil, err
+		return dto.PincodeCatalogResponse{}, err
 	}
-	response := make([]dto.NearbyStoreResponse, 0)
+	response := dto.PincodeCatalogResponse{Pincode: pincode, Stores: []dto.StoreSummary{}, Products: []dto.CatalogProductResponse{}}
+	stores, err := s.catalog.ListStoresForPincode(nil, pincode)
+	if err != nil {
+		return dto.PincodeCatalogResponse{}, err
+	}
+	if len(stores) == 0 {
+		return response, nil
+	}
+	response.Serviceable = true
 	for _, store := range stores {
-		if store.Latitude == nil || store.Longitude == nil {
-			continue
+		response.Stores = append(response.Stores, dto.StoreSummary{ID: store.ID.String(), Name: store.Name})
+	}
+	products, err := s.catalog.ListProductsForPincode(nil, pincode)
+	if err != nil {
+		return dto.PincodeCatalogResponse{}, err
+	}
+	for _, product := range products {
+		var categoryID *string
+		if product.CategoryID != nil {
+			value := product.CategoryID.String()
+			categoryID = &value
 		}
-		distance := distanceKM(latitude, longitude, *store.Latitude, *store.Longitude)
-		if distance > radiusKM {
-			continue
+		images := product.Images
+		if images == nil {
+			images = []string{}
 		}
-		products, err := s.catalog.ListProductsForStore(nil, store.ID)
-		if err != nil {
-			return nil, err
-		}
-		if len(products) == 0 {
-			continue
-		}
-		mappedProducts := make([]dto.CatalogProductResponse, 0, len(products))
-		for _, product := range products {
-			var categoryID *string
-			if product.CategoryID != nil {
-				value := product.CategoryID.String()
-				categoryID = &value
-			}
-			images := product.Images
-			if images == nil {
-				images = []string{}
-			}
-			mappedProducts = append(mappedProducts, dto.CatalogProductResponse{
-				ID: product.ID.String(), StoreID: product.StoreID.String(), Name: product.Name, Description: product.Description,
-				Price: product.Price, ImageURL: product.ImageURL, Images: images, CategoryID: categoryID, Quantity: product.Quantity,
-			})
-		}
-		response = append(response, dto.NearbyStoreResponse{
-			Store: dto.StoreResponse{ID: store.ID.String(), Name: store.Name, Address: store.Address,
-				Latitude: store.Latitude, Longitude: store.Longitude, IsActive: store.IsActive, DistanceKM: math.Round(distance*100) / 100},
-			Products: mappedProducts,
+		response.Products = append(response.Products, dto.CatalogProductResponse{
+			ID: product.ID.String(), StoreID: product.StoreID.String(), StoreName: product.StoreName, Name: product.Name, Description: product.Description,
+			Price: product.Price, ImageURL: product.ImageURL, Images: images, CategoryID: categoryID, CategoryName: product.CategoryName, Quantity: product.Quantity,
 		})
 	}
 	return response, nil
@@ -99,9 +100,18 @@ func (s *AdminService) ListStores() ([]dto.StoreResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	ids := make([]uuid.UUID, 0, len(stores))
+	for i := range stores {
+		ids = append(ids, stores[i].ID)
+	}
+	pincodes, err := s.catalog.ListPincodes(nil, ids)
+	if err != nil {
+		return nil, err
+	}
 	response := make([]dto.StoreResponse, 0, len(stores))
 	for i := range stores {
-		response = append(response, mapStore(&stores[i], 0))
+		stores[i].Pincodes = pincodes[stores[i].ID]
+		response = append(response, mapStore(&stores[i]))
 	}
 	return response, nil
 }
@@ -122,9 +132,17 @@ func (s *AdminService) ListProducts(storeID *uuid.UUID) ([]dto.CatalogProductRes
 			}
 		}
 	}
+	storeNames := map[uuid.UUID]string{}
+	if stores, err := s.catalog.ListAllStores(nil); err == nil {
+		for _, store := range stores {
+			storeNames[store.ID] = store.Name
+		}
+	}
 	response := make([]dto.CatalogProductResponse, 0, len(products))
 	for i := range products {
-		response = append(response, mapProduct(&products[i], quantities[products[i].ID]))
+		mapped := mapProduct(&products[i], quantities[products[i].ID])
+		mapped.StoreName = storeNames[products[i].StoreID]
+		response = append(response, mapped)
 	}
 	return response, nil
 }
@@ -149,21 +167,28 @@ func (s *AdminService) CreateStore(request dto.StoreRequest) (dto.StoreResponse,
 	if err != nil {
 		return dto.StoreResponse{}, err
 	}
-	if request.Latitude == nil || request.Longitude == nil {
-		return dto.StoreResponse{}, fmt.Errorf("%w: store latitude and longitude are required", ErrInvalidInput)
-	}
-	if err := validateCoordinates(*request.Latitude, *request.Longitude); err != nil {
+	pincodes, err := normalizePincodes(request.Pincodes)
+	if err != nil {
 		return dto.StoreResponse{}, err
+	}
+	if len(pincodes) == 0 {
+		return dto.StoreResponse{}, fmt.Errorf("%w: add at least one serviceable pincode", ErrInvalidInput)
 	}
 	isActive := true
 	if request.IsActive != nil {
 		isActive = *request.IsActive
 	}
-	store := &domain.Store{ID: uuid.New(), Name: name, Address: address, Latitude: request.Latitude, Longitude: request.Longitude, IsActive: isActive, CreatedAt: time.Now().UTC()}
-	if err := s.catalog.CreateStore(nil, store); err != nil {
+	store := &domain.Store{ID: uuid.New(), Name: name, Address: address, IsActive: isActive, CreatedAt: time.Now().UTC(), Pincodes: pincodes}
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.catalog.CreateStore(tx, store); err != nil {
+			return err
+		}
+		return s.catalog.ReplacePincodes(tx, store.ID, pincodes)
+	})
+	if err != nil {
 		return dto.StoreResponse{}, err
 	}
-	return mapStore(store, 0), nil
+	return mapStore(store), nil
 }
 
 func (s *AdminService) UpdateStore(id uuid.UUID, request dto.StorePatchRequest) (dto.StoreResponse, error) {
@@ -183,25 +208,41 @@ func (s *AdminService) UpdateStore(id uuid.UUID, request dto.StorePatchRequest) 
 			return dto.StoreResponse{}, err
 		}
 	}
-	if request.Latitude != nil {
-		store.Latitude = request.Latitude
-	}
-	if request.Longitude != nil {
-		store.Longitude = request.Longitude
-	}
-	if store.Latitude == nil || store.Longitude == nil {
-		return dto.StoreResponse{}, fmt.Errorf("%w: store latitude and longitude are required", ErrInvalidInput)
-	}
-	if err := validateCoordinates(*store.Latitude, *store.Longitude); err != nil {
-		return dto.StoreResponse{}, err
-	}
 	if request.IsActive != nil {
 		store.IsActive = *request.IsActive
 	}
-	if err := s.catalog.UpdateStore(nil, store); err != nil {
+	var newPincodes []string
+	if request.Pincodes != nil {
+		newPincodes, err = normalizePincodes(*request.Pincodes)
+		if err != nil {
+			return dto.StoreResponse{}, err
+		}
+		if len(newPincodes) == 0 {
+			return dto.StoreResponse{}, fmt.Errorf("%w: a store needs at least one serviceable pincode", ErrInvalidInput)
+		}
+	}
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.catalog.UpdateStore(tx, store); err != nil {
+			return err
+		}
+		if request.Pincodes != nil {
+			return s.catalog.ReplacePincodes(tx, store.ID, newPincodes)
+		}
+		return nil
+	})
+	if err != nil {
 		return dto.StoreResponse{}, err
 	}
-	return mapStore(store, 0), nil
+	if request.Pincodes != nil {
+		store.Pincodes = newPincodes
+	} else {
+		existing, err := s.catalog.ListPincodes(nil, []uuid.UUID{store.ID})
+		if err != nil {
+			return dto.StoreResponse{}, err
+		}
+		store.Pincodes = existing[store.ID]
+	}
+	return mapStore(store), nil
 }
 
 func (s *AdminService) CreateProduct(request dto.ProductRequest) (dto.CatalogProductResponse, error) {
@@ -216,7 +257,8 @@ func (s *AdminService) CreateProduct(request dto.ProductRequest) (dto.CatalogPro
 	if err != nil {
 		return dto.CatalogProductResponse{}, fmt.Errorf("%w: store_id is required", ErrInvalidInput)
 	}
-	if _, err := s.catalog.FindStore(nil, storeID); err != nil {
+	store, err := s.catalog.FindStore(nil, storeID)
+	if err != nil {
 		return dto.CatalogProductResponse{}, err
 	}
 	categoryID, err := optionalUUID(request.CategoryID)
@@ -241,7 +283,9 @@ func (s *AdminService) CreateProduct(request dto.ProductRequest) (dto.CatalogPro
 	if err := s.catalog.UpsertInventory(nil, inventory); err != nil {
 		return dto.CatalogProductResponse{}, err
 	}
-	return mapProduct(product, quantity), nil
+	created := mapProduct(product, quantity)
+	created.StoreName = store.Name
+	return created, nil
 }
 
 func (s *AdminService) UpdateProduct(id uuid.UUID, request dto.ProductPatchRequest) (dto.CatalogProductResponse, error) {
@@ -280,7 +324,11 @@ func (s *AdminService) UpdateProduct(id uuid.UUID, request dto.ProductPatchReque
 	if err := s.catalog.UpdateProduct(nil, product); err != nil {
 		return dto.CatalogProductResponse{}, err
 	}
-	return mapProduct(product, 0), nil
+	updated := mapProduct(product, 0)
+	if store, err := s.catalog.FindStore(nil, product.StoreID); err == nil {
+		updated.StoreName = store.Name
+	}
+	return updated, nil
 }
 
 // normalizeImages trims, drops blanks, and de-nils an image URL list.
@@ -384,8 +432,12 @@ func (s *AdminService) RemoveDeliveryAssignment(deliveryID, storeID uuid.UUID) e
 	return s.commerce.DeleteAssignment(nil, deliveryID, storeID)
 }
 
-func mapStore(store *domain.Store, distance float64) dto.StoreResponse {
-	return dto.StoreResponse{ID: store.ID.String(), Name: store.Name, Address: store.Address, Latitude: store.Latitude, Longitude: store.Longitude, IsActive: store.IsActive, DistanceKM: distance}
+func mapStore(store *domain.Store) dto.StoreResponse {
+	pincodes := store.Pincodes
+	if pincodes == nil {
+		pincodes = []string{}
+	}
+	return dto.StoreResponse{ID: store.ID.String(), Name: store.Name, Address: store.Address, Pincodes: pincodes, IsActive: store.IsActive}
 }
 
 func mapProduct(product *domain.Product, quantity int) dto.CatalogProductResponse {
@@ -401,23 +453,40 @@ func mapProduct(product *domain.Product, quantity int) dto.CatalogProductRespons
 	return dto.CatalogProductResponse{ID: product.ID.String(), StoreID: product.StoreID.String(), Name: product.Name, Description: product.Description, Price: product.Price, ImageURL: product.ImageURL, Images: images, CategoryID: categoryID, Quantity: quantity}
 }
 
-func validateCoordinates(latitude, longitude float64) error {
-	if latitude < -90 || latitude > 90 {
-		return fmt.Errorf("%w: latitude must be between -90 and 90", ErrInvalidInput)
+// normalizePincode trims a pincode and checks it is 4-10 digits.
+func normalizePincode(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("%w: pincode is required", ErrInvalidInput)
 	}
-	if longitude < -180 || longitude > 180 {
-		return fmt.Errorf("%w: longitude must be between -180 and 180", ErrInvalidInput)
+	if !pincodePattern.MatchString(value) {
+		return "", fmt.Errorf("%w: pincode must contain 4 to 10 digits", ErrInvalidInput)
 	}
-	return nil
+	return value, nil
 }
 
-func distanceKM(lat1, lon1, lat2, lon2 float64) float64 {
-	const earthRadius = 6371.0
-	lat1Rad, lat2Rad := lat1*math.Pi/180, lat2*math.Pi/180
-	dLat := (lat2 - lat1) * math.Pi / 180
-	dLon := (lon2 - lon1) * math.Pi / 180
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) + math.Cos(lat1Rad)*math.Cos(lat2Rad)*math.Sin(dLon/2)*math.Sin(dLon/2)
-	return earthRadius * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+const maxPincodesPerStore = 200
+
+// normalizePincodes validates, trims and de-duplicates an admin-supplied list,
+// keeping the original order.
+func normalizePincodes(in []string) ([]string, error) {
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, raw := range in {
+		pincode, err := normalizePincode(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w (got %q)", err, strings.TrimSpace(raw))
+		}
+		if seen[pincode] {
+			continue
+		}
+		seen[pincode] = true
+		out = append(out, pincode)
+	}
+	if len(out) > maxPincodesPerStore {
+		return nil, fmt.Errorf("%w: a store can serve at most %d pincodes", ErrInvalidInput, maxPincodesPerStore)
+	}
+	return out, nil
 }
 
 func requiredText(value, field string, max int) (string, error) {

@@ -1,19 +1,17 @@
 package dto
 
 type StoreRequest struct {
-	Name      string   `json:"name"`
-	Address   string   `json:"address"`
-	Latitude  *float64 `json:"latitude"`
-	Longitude *float64 `json:"longitude"`
-	IsActive  *bool    `json:"is_active"`
+	Name     string   `json:"name"`
+	Address  string   `json:"address"`
+	Pincodes []string `json:"pincodes"`
+	IsActive *bool    `json:"is_active"`
 }
 
 type StorePatchRequest struct {
-	Name      *string  `json:"name"`
-	Address   *string  `json:"address"`
-	Latitude  *float64 `json:"latitude"`
-	Longitude *float64 `json:"longitude"`
-	IsActive  *bool    `json:"is_active"`
+	Name     *string   `json:"name"`
+	Address  *string   `json:"address"`
+	Pincodes *[]string `json:"pincodes"`
+	IsActive *bool     `json:"is_active"`
 }
 
 type ProductRequest struct {

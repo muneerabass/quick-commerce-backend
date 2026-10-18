@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"strconv"
-
 	"quick-commerce/internal/api/middleware"
 	"quick-commerce/internal/api/rest"
 	"quick-commerce/internal/dto"
@@ -25,7 +23,7 @@ func SetupCatalogRoutes(rh *rest.RestHandler, auth *services.AuthService) {
 	h := &CatalogHandler{catalog: services.NewCatalogService(catalogRepository), admin: admin}
 
 	api := rh.App.Group("/api/v1")
-	api.Get("/catalog/nearby", h.Nearby)
+	api.Get("/catalog/products", h.Products)
 
 	authenticated := middleware.RequireAuth(auth.TokenService(), auth.ValidateAccessSession)
 	adminRoutes := api.Group("/admin", authenticated, middleware.RequireRole(auth.UserRole, "admin"))
@@ -87,27 +85,14 @@ func (h *CatalogHandler) ListCategories(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"categories": categories})
 }
 
-func (h *CatalogHandler) Nearby(c *fiber.Ctx) error {
-	latitude, err := strconv.ParseFloat(c.Query("latitude"), 64)
-	if err != nil {
-		return writeError(c, fiber.StatusBadRequest, "latitude is required")
-	}
-	longitude, err := strconv.ParseFloat(c.Query("longitude"), 64)
-	if err != nil {
-		return writeError(c, fiber.StatusBadRequest, "longitude is required")
-	}
-	radius := 10.0
-	if value := c.Query("radius_km"); value != "" {
-		radius, err = strconv.ParseFloat(value, 64)
-		if err != nil {
-			return writeError(c, fiber.StatusBadRequest, "invalid radius_km")
-		}
-	}
-	stores, err := h.catalog.Nearby(latitude, longitude, radius)
+// Products returns the pincode catalog. An unserved pincode is a normal
+// 200 with serviceable=false, not an error.
+func (h *CatalogHandler) Products(c *fiber.Ctx) error {
+	catalog, err := h.catalog.ProductsForPincode(c.Query("pincode"))
 	if err != nil {
 		return serviceError(c, err)
 	}
-	return c.JSON(fiber.Map{"stores": stores})
+	return c.JSON(catalog)
 }
 
 func (h *CatalogHandler) CreateStore(c *fiber.Ctx) error {

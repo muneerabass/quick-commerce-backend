@@ -19,15 +19,15 @@ func RequireAuth(tokens *services.TokenService, validateSession func(uuid.UUID, 
 		header := c.Get(fiber.HeaderAuthorization)
 		parts := strings.Fields(header)
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "authentication required"})
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "authentication required", "code": "unauthorized"})
 		}
 		claims, err := tokens.Parse(parts[1], time.Now().UTC())
 		if err != nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid access token"})
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid access token", "code": "unauthorized"})
 		}
 		if validateSession != nil {
 			if err := validateSession(claims.UserID, claims.SessionID); err != nil {
-				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "session is no longer active"})
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "session is no longer active", "code": "unauthorized"})
 			}
 		}
 		c.Locals(UserIDLocal, claims.UserID)
@@ -45,17 +45,17 @@ func RequireRole(lookup func(uuid.UUID) (string, error), allowed ...string) fibe
 	return func(c *fiber.Ctx) error {
 		userID, ok := UserID(c)
 		if !ok {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "authentication required"})
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "authentication required", "code": "unauthorized"})
 		}
 		role, err := lookup(userID)
 		if err != nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "authentication required"})
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "authentication required", "code": "unauthorized"})
 		}
 		for _, candidate := range allowed {
 			if role == candidate {
 				return c.Next()
 			}
 		}
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "insufficient permissions"})
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "insufficient permissions", "code": "forbidden"})
 	}
 }

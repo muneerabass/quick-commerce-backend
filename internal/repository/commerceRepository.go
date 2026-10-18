@@ -23,7 +23,11 @@ type CatalogRepository interface {
 	FindProduct(db *gorm.DB, id uuid.UUID) (*domain.Product, error)
 	CreateProduct(db *gorm.DB, product *domain.Product) error
 	UpdateProduct(db *gorm.DB, product *domain.Product) error
-	ListProductsForStore(db *gorm.DB, storeID uuid.UUID) ([]domain.ProductInventory, error)
+	ListProductsForPincode(db *gorm.DB, pincode string) ([]domain.ProductInventory, error)
+	ListStoresForPincode(db *gorm.DB, pincode string) ([]domain.Store, error)
+	ListPincodes(db *gorm.DB, storeIDs []uuid.UUID) (map[uuid.UUID][]string, error)
+	ReplacePincodes(db *gorm.DB, storeID uuid.UUID, pincodes []string) error
+	StoreServesPincode(db *gorm.DB, storeID uuid.UUID, pincode string) (bool, error)
 	FindInventoryForUpdate(db *gorm.DB, storeID, productID uuid.UUID) (*domain.Inventory, error)
 	UpdateInventory(db *gorm.DB, inventory *domain.Inventory) error
 	UpsertInventory(db *gorm.DB, inventory *domain.Inventory) error
@@ -85,8 +89,7 @@ func (r *catalogRepository) CreateStore(db *gorm.DB, store *domain.Store) error 
 
 func (r *catalogRepository) UpdateStore(db *gorm.DB, store *domain.Store) error {
 	return dbOrDefault(db, r.db).Model(&domain.Store{}).Where("id = ?", store.ID).Updates(map[string]any{
-		"name": store.Name, "address": store.Address, "latitude": store.Latitude,
-		"longitude": store.Longitude, "is_active": store.IsActive,
+		"name": store.Name, "address": store.Address, "is_active": store.IsActive,
 	}).Error
 }
 
@@ -114,13 +117,66 @@ func (r *catalogRepository) UpdateProduct(db *gorm.DB, product *domain.Product) 
 		Updates(product).Error
 }
 
-func (r *catalogRepository) ListProductsForStore(db *gorm.DB, storeID uuid.UUID) ([]domain.ProductInventory, error) {
+// ListProductsForPincode returns in-stock products of every active store that
+// serves the pincode, labelled with their store and category names.
+func (r *catalogRepository) ListProductsForPincode(db *gorm.DB, pincode string) ([]domain.ProductInventory, error) {
 	var rows []domain.ProductInventory
 	err := dbOrDefault(db, r.db).Table("products").Select(
-		"products.id, products.store_id, products.name, products.description, products.price, products.image_url, products.images, products.category_id, products.created_at, inventory.quantity",
-	).Joins("JOIN inventory ON inventory.product_id = products.id AND inventory.store_id = ? AND inventory.quantity > 0", storeID).
+		"products.id, products.store_id, products.name, products.description, products.price, products.image_url, products.images, products.category_id, products.created_at, inventory.quantity, stores.name AS store_name, categories.name AS category_name",
+	).
+		Joins("JOIN inventory ON inventory.product_id = products.id AND inventory.store_id = products.store_id AND inventory.quantity > 0").
+		Joins("JOIN stores ON stores.id = products.store_id AND stores.is_active = ?", true).
+		Joins("JOIN store_pincodes sp ON sp.store_id = stores.id AND sp.pincode = ?", pincode).
+		Joins("LEFT JOIN categories ON categories.id = products.category_id").
 		Order("products.name ASC").Scan(&rows).Error
 	return rows, err
+}
+
+func (r *catalogRepository) ListStoresForPincode(db *gorm.DB, pincode string) ([]domain.Store, error) {
+	var stores []domain.Store
+	err := dbOrDefault(db, r.db).Table("stores").
+		Joins("JOIN store_pincodes sp ON sp.store_id = stores.id AND sp.pincode = ?", pincode).
+		Where("stores.is_active = ?", true).Order("stores.name ASC").Find(&stores).Error
+	return stores, err
+}
+
+func (r *catalogRepository) ListPincodes(db *gorm.DB, storeIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
+	result := map[uuid.UUID][]string{}
+	if len(storeIDs) == 0 {
+		return result, nil
+	}
+	var rows []domain.StorePincode
+	if err := dbOrDefault(db, r.db).Where("store_id IN ?", storeIDs).Order("pincode ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		result[row.StoreID] = append(result[row.StoreID], row.Pincode)
+	}
+	return result, nil
+}
+
+// ReplacePincodes swaps a store's serviceable pincodes. Call it inside the same
+// transaction as the store write so a failure never leaves a half-updated list.
+func (r *catalogRepository) ReplacePincodes(db *gorm.DB, storeID uuid.UUID, pincodes []string) error {
+	conn := dbOrDefault(db, r.db)
+	if err := conn.Where("store_id = ?", storeID).Delete(&domain.StorePincode{}).Error; err != nil {
+		return err
+	}
+	if len(pincodes) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	rows := make([]domain.StorePincode, 0, len(pincodes))
+	for _, pincode := range pincodes {
+		rows = append(rows, domain.StorePincode{StoreID: storeID, Pincode: pincode, CreatedAt: now})
+	}
+	return conn.Create(&rows).Error
+}
+
+func (r *catalogRepository) StoreServesPincode(db *gorm.DB, storeID uuid.UUID, pincode string) (bool, error) {
+	var count int64
+	err := dbOrDefault(db, r.db).Model(&domain.StorePincode{}).Where("store_id = ? AND pincode = ?", storeID, pincode).Count(&count).Error
+	return count > 0, err
 }
 
 func (r *catalogRepository) FindInventoryForUpdate(db *gorm.DB, storeID, productID uuid.UUID) (*domain.Inventory, error) {
