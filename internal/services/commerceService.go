@@ -170,34 +170,52 @@ func (s *CartService) UpdateItem(userID, itemID uuid.UUID, quantity int) (dto.Ca
 }
 
 func (s *CartService) DeleteItem(userID, itemID uuid.UUID) (dto.CartResponse, error) {
-	cart, err := s.getOrCreateCart(userID)
+	// M-010: lock the cart row so a concurrent delete cannot leave a stale
+	// store_id when two requests both remove the last item simultaneously.
+	var cart *domain.Cart
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		c, err := s.commerce.FindCart(tx, userID, true)
+		if err != nil {
+			return err
+		}
+		cart = c
+		if err := s.commerce.DeleteCartItem(tx, cart.ID, itemID); err != nil {
+			return err
+		}
+		items, err := s.commerce.ListCartItems(tx, cart.ID)
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			cart.StoreID = nil
+			cart.UpdatedAt = time.Now().UTC()
+			if err := s.commerce.UpdateCart(tx, cart); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return dto.CartResponse{}, err
-	}
-	if err := s.commerce.DeleteCartItem(nil, cart.ID, itemID); err != nil {
-		return dto.CartResponse{}, err
-	}
-	if items, err := s.commerce.ListCartItems(nil, cart.ID); err == nil && len(items) == 0 {
-		cart.StoreID = nil
-		cart.UpdatedAt = time.Now().UTC()
-		if err := s.commerce.UpdateCart(nil, cart); err != nil {
-			return dto.CartResponse{}, err
-		}
 	}
 	return s.mapCart(cart, nil)
 }
 
 func (s *CartService) Clear(userID uuid.UUID) error {
-	cart, err := s.getOrCreateCart(userID)
-	if err != nil {
-		return err
-	}
-	if err := s.commerce.ClearCart(nil, cart.ID); err != nil {
-		return err
-	}
-	cart.StoreID = nil
-	cart.UpdatedAt = time.Now().UTC()
-	return s.commerce.UpdateCart(nil, cart)
+	// M-010: lock the cart row before clearing so concurrent deletes cannot
+	// race to leave a stale store_id.
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		cart, err := s.commerce.FindCart(tx, userID, true)
+		if err != nil {
+			return err
+		}
+		if err := s.commerce.ClearCart(tx, cart.ID); err != nil {
+			return err
+		}
+		cart.StoreID = nil
+		cart.UpdatedAt = time.Now().UTC()
+		return s.commerce.UpdateCart(tx, cart)
+	})
 }
 
 func (s *CartService) getOrCreateCart(userID uuid.UUID) (*domain.Cart, error) {
@@ -263,6 +281,13 @@ func (s *OrderService) Create(userID, addressID uuid.UUID, idempotencyKey string
 		cart, err := s.commerce.FindCart(tx, userID, true)
 		if err != nil {
 			return err
+		}
+		// M-001: enforce the one-active-order rule inside the transaction so
+		// the cart lock and the count see a consistent snapshot.
+		if open, err := s.commerce.CountActiveOrdersForCustomer(tx, userID); err != nil {
+			return err
+		} else if open > 0 {
+			return ErrActiveOrders
 		}
 		if cart.StoreID == nil {
 			return ErrEmptyCart

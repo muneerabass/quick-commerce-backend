@@ -357,15 +357,20 @@ func (s *AuthService) UpdateProfile(userID uuid.UUID, name *string) (dto.UserRes
 }
 
 func (s *AuthService) DeleteAccount(userID uuid.UUID) error {
-	// A customer with an open order, or a rider mid-delivery, can't vanish.
-	var open int64
-	if err := s.db.Table("orders").Where("(user_id = ? AND status IN ('pending','accepted')) OR (accepted_by = ? AND status = 'accepted')", userID, userID).Count(&open).Error; err != nil {
-		return err
-	}
-	if open > 0 {
-		return ErrActiveOrders
-	}
+	// M-002: the open-order check and the anonymize must happen in the same
+	// transaction so a new order cannot slip in between the two operations.
 	return s.db.Transaction(func(tx *gorm.DB) error {
+		// A customer with an open order, or a rider mid-delivery, can't vanish.
+		var open int64
+		if err := tx.Table("orders").Where(
+			"(user_id = ? AND status IN ('pending','accepted')) OR (accepted_by = ? AND status = 'accepted')",
+			userID, userID,
+		).Count(&open).Error; err != nil {
+			return err
+		}
+		if open > 0 {
+			return ErrActiveOrders
+		}
 		if err := s.users.Anonymize(tx, userID); err != nil {
 			return err
 		}

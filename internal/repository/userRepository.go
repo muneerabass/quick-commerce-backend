@@ -62,6 +62,10 @@ func (r *userRepository) Anonymize(db *gorm.DB, id uuid.UUID) error {
 			"name":              nil,
 			"phone_verified_at": nil,
 			"status":            "deleted",
+			// H-003: reset role so a deleted admin no longer occupies the
+			// users_one_admin_idx partial unique index (belt-and-suspenders;
+			// the index itself is also fixed to exclude deleted rows).
+			"role": "customer",
 		})
 	if query.Error != nil {
 		return query.Error

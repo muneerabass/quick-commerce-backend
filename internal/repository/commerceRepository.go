@@ -242,7 +242,11 @@ type CommerceRepository interface {
 	ReassignOrder(db *gorm.DB, orderID uuid.UUID, now time.Time) error
 	RestoreInventory(db *gorm.DB, orderID uuid.UUID, now time.Time) error
 	ListStalePendingOrderIDs(db *gorm.DB, cutoff time.Time, limit int) ([]uuid.UUID, error)
-	RecordWrongDeliveryCode(db *gorm.DB, orderID uuid.UUID) (int, error)
+	// RecordWrongDeliveryCode atomically increments the failed-attempt counter
+	// only when it is still below max, and returns the new count. If the counter
+	// was already at or above max the increment is skipped and max is returned,
+	// so the caller never needs a separate pre-check.
+	RecordWrongDeliveryCode(db *gorm.DB, orderID uuid.UUID, max int) (int, error)
 	AppendOrderEvent(db *gorm.DB, event *domain.OrderEvent) error
 	ListOrderEvents(db *gorm.DB, orderID uuid.UUID) ([]domain.OrderEvent, error)
 	CountActiveOrdersForCustomer(db *gorm.DB, userID uuid.UUID) (int64, error)

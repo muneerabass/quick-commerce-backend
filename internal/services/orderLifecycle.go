@@ -371,6 +371,8 @@ func (s *OrderService) verifyDeliveryCode(order *domain.Order, code string) erro
 		return nil
 	}
 	max := orderPolicy.MaxCodeAttempts
+	// Fast-path: already locked from a previous attempt (stale read is fine
+	// here — we'll never unlock an order that is locked).
 	if order.DeliveryCodeAttempts >= max {
 		return ErrDeliveryCodeLocked
 	}
@@ -381,7 +383,10 @@ func (s *OrderService) verifyDeliveryCode(order *domain.Order, code string) erro
 	if subtle.ConstantTimeCompare([]byte(code), []byte(order.DeliveryCode)) == 1 {
 		return nil
 	}
-	attempts, err := s.commerce.RecordWrongDeliveryCode(nil, order.ID)
+	// M-003: the increment is atomic — the WHERE clause in RecordWrongDeliveryCode
+	// ensures two concurrent wrong-code requests cannot both push the counter
+	// past the limit. The returned count is authoritative.
+	attempts, err := s.commerce.RecordWrongDeliveryCode(nil, order.ID, max)
 	if err != nil {
 		return err
 	}

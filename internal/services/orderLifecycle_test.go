@@ -96,6 +96,37 @@ func (f *lifecycleFixture) place(t *testing.T, key string) dto.OrderResponse {
 	return order
 }
 
+// insertPendingOrder bypasses OrderService.Create and writes the order directly
+// into the DB. Use it in tests whose subject is post-creation lifecycle (e.g.
+// the sweeper) and that need multiple concurrent pending orders for the same
+// user — something M-001 intentionally prevents through the service.
+func (f *lifecycleFixture) insertPendingOrder(t *testing.T, quantity int, at time.Time) dto.OrderResponse {
+	t.Helper()
+	code, err := generateDeliveryCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := &domain.Order{
+		ID: uuid.New(), UserID: f.userID, StoreID: f.storeID,
+		Status: "pending", PaymentMethod: "cod", PaymentStatus: "pending",
+		SubtotalAmount: 1000 * quantity, DeliveryFee: 2500, HandlingFee: 400,
+		TotalAmount:    1000*quantity + 2500 + 400,
+		RecipientName: "C", DeliveryPhone: "+919876540001", AddressLine1: "1 Rd",
+		City: "BLR", State: "KA", Pincode: "560001",
+		DeliveryCode: code, CreatedAt: at, UpdatedAt: at,
+	}
+	if err := f.db.Create(order).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Decrement inventory to match what OrderService.Create would do.
+	if err := f.db.Model(&domain.Inventory{}).
+		Where("store_id = ? AND product_id = ?", f.storeID, f.productID).
+		UpdateColumn("quantity", gorm.Expr("quantity - ?", quantity)).Error; err != nil {
+		t.Fatal(err)
+	}
+	return dto.OrderResponse{ID: order.ID.String(), DeliveryCode: code}
+}
+
 func TestFeesAreComputedOnTheServerAndStoredOnTheOrder(t *testing.T) {
 	f := newLifecycleFixture(t, 100)
 	small := f.addToCart(t, 1) // 1000 paise, below the free-delivery threshold
@@ -269,14 +300,14 @@ func TestCancelAndAcceptAreMutuallyExclusive(t *testing.T) {
 
 func TestSweeperCancelsOnlyStalePendingOrders(t *testing.T) {
 	f := newLifecycleFixture(t, 10)
+	// Place the stale order via the service to prove the normal path works.
 	f.addToCart(t, 2)
 	stale := f.place(t, "")
 	f.db.Model(&domain.Order{}).Where("id = ?", stale.ID).Update("created_at", time.Now().UTC().Add(-2*time.Hour))
-	f.addToCart(t, 1)
-	fresh := f.place(t, "")
-	f.addToCart(t, 1)
-	accepted := f.place(t, "")
-	f.db.Model(&domain.Order{}).Where("id = ?", accepted.ID).Update("created_at", time.Now().UTC().Add(-2*time.Hour))
+	// M-001 blocks placing a second order while the first is pending, so insert
+	// the fresh and accepted orders directly to test the sweeper in isolation.
+	fresh := f.insertPendingOrder(t, 1, time.Now().UTC())
+	accepted := f.insertPendingOrder(t, 1, time.Now().UTC().Add(-2*time.Hour))
 	if _, err := f.orders.Accept(f.riderID, uuid.MustParse(accepted.ID)); err != nil {
 		t.Fatal(err)
 	}
@@ -435,6 +466,10 @@ func TestOrderListPagination(t *testing.T) {
 		f.addToCart(t, 1)
 		order := f.place(t, "")
 		f.db.Model(&domain.Order{}).Where("id = ?", order.ID).Update("created_at", time.Now().UTC().Add(-time.Duration(i)*time.Hour))
+		// M-001: cancel each order so the next iteration can place a new one.
+		if _, err := f.orders.Cancel(f.userID, uuid.MustParse(order.ID), "pagination test"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	page, err := f.orders.List(f.userID, 2, nil)
 	if err != nil || len(page.Orders) != 2 || page.NextBefore == nil {
@@ -471,5 +506,185 @@ func TestDefaultAddressCanBeEdited(t *testing.T) {
 	}
 	if !edited.IsDefault || edited.Landmark == nil || *edited.Landmark != landmark {
 		t.Fatalf("edit should apply and keep it the default: %+v", edited)
+	}
+}
+
+// --- Phase 2 regression tests ---
+
+// M-001: a customer with a pending order cannot place another.
+func TestActiveOrderBlocksNewOrder(t *testing.T) {
+	f := newLifecycleFixture(t, 10)
+	f.addToCart(t, 1)
+	f.place(t, "")
+
+	f.addToCart(t, 1)
+	if _, err := f.orders.Create(f.userID, f.addressID, ""); !errors.Is(err, ErrActiveOrders) {
+		t.Fatalf("expected ErrActiveOrders while first order is pending, got %v", err)
+	}
+}
+
+// M-001: a completed order allows a new order.
+func TestCompletedOrderAllowsNewOrder(t *testing.T) {
+	f := newLifecycleFixture(t, 10)
+	f.addToCart(t, 1)
+	first := f.place(t, "")
+	id := uuid.MustParse(first.ID)
+	if _, err := f.orders.Accept(f.riderID, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.orders.Complete(f.riderID, id, first.DeliveryCode); err != nil {
+		t.Fatal(err)
+	}
+
+	f.addToCart(t, 1)
+	if _, err := f.orders.Create(f.userID, f.addressID, ""); err != nil {
+		t.Fatalf("should place a new order after completing the first: %v", err)
+	}
+}
+
+// M-003: delivery code counter never exceeds MaxCodeAttempts.
+func TestDeliveryCodeAttemptCounterNeverExceedsMax(t *testing.T) {
+	f := newLifecycleFixture(t, 10)
+	f.addToCart(t, 1)
+	order := f.place(t, "")
+	id := uuid.MustParse(order.ID)
+	if _, err := f.orders.Accept(f.riderID, id); err != nil {
+		t.Fatal(err)
+	}
+
+	max := orderPolicy.MaxCodeAttempts
+	for i := 0; i < max-1; i++ {
+		_, err := f.orders.Complete(f.riderID, id, "0000")
+		var badCode *InvalidDeliveryCodeError
+		if !errors.As(err, &badCode) {
+			t.Fatalf("attempt %d: expected InvalidDeliveryCodeError, got %v", i+1, err)
+		}
+	}
+	if _, err := f.orders.Complete(f.riderID, id, "0000"); !errors.Is(err, ErrDeliveryCodeLocked) {
+		t.Fatalf("after %d wrong attempts expected ErrDeliveryCodeLocked, got %v", max, err)
+	}
+
+	var stored domain.Order
+	if err := f.db.First(&stored, "id = ?", id).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.DeliveryCodeAttempts > max {
+		t.Fatalf("counter exceeded max: got %d, want <= %d", stored.DeliveryCodeAttempts, max)
+	}
+}
+
+// M-010: clearing the cart nulls store_id atomically.
+func TestClearCartNullsStoreID(t *testing.T) {
+	f := newLifecycleFixture(t, 10)
+	f.addToCart(t, 2)
+	if err := f.cart.Clear(f.userID); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	cart, err := f.commerce.FindCart(nil, f.userID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cart.StoreID != nil {
+		t.Fatalf("store_id should be nil after clearing, got %v", cart.StoreID)
+	}
+}
+
+// M-010: deleting the last item nulls store_id atomically.
+func TestDeleteLastItemNullsStoreID(t *testing.T) {
+	f := newLifecycleFixture(t, 10)
+	resp := f.addToCart(t, 1)
+	itemID := uuid.MustParse(resp.Items[0].ID)
+	if _, err := f.cart.DeleteItem(f.userID, itemID); err != nil {
+		t.Fatalf("delete item: %v", err)
+	}
+	cart, err := f.commerce.FindCart(nil, f.userID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cart.StoreID != nil {
+		t.Fatalf("store_id should be nil after deleting the last item, got %v", cart.StoreID)
+	}
+}
+
+// M-002: user with a pending order cannot delete their account.
+func TestDeleteAccountWithPendingOrderFails(t *testing.T) {
+	f := newLifecycleFixture(t, 10)
+	f.addToCart(t, 1)
+	f.place(t, "")
+
+	auth := testAuthService(f.db, &usefulRecordingSender{}, time.Minute, 0, 5)
+	if err := auth.DeleteAccount(f.userID); !errors.Is(err, ErrActiveOrders) {
+		t.Fatalf("expected ErrActiveOrders with pending order, got %v", err)
+	}
+}
+
+// M-002: account deletion succeeds after cancelling the order.
+func TestDeleteAccountAfterCancelSucceeds(t *testing.T) {
+	f := newLifecycleFixture(t, 10)
+	f.addToCart(t, 1)
+	order := f.place(t, "")
+	if _, err := f.orders.Cancel(f.userID, uuid.MustParse(order.ID), "changed mind"); err != nil {
+		t.Fatal(err)
+	}
+	auth := testAuthService(f.db, &usefulRecordingSender{}, time.Minute, 0, 5)
+	if err := auth.DeleteAccount(f.userID); err != nil {
+		t.Fatalf("DeleteAccount should succeed after cancellation: %v", err)
+	}
+}
+
+// H-004: CreateDeliveryUser with store_id assigns the rider in one transaction.
+func TestCreateDeliveryUserWithStoreIDIsAtomic(t *testing.T) {
+	f := newLifecycleFixture(t, 10)
+	storeIDStr := f.storeID.String()
+	admin := NewAdminService(f.db, repository.NewUserRepository(f.db), f.catalog, f.commerce)
+
+	user, err := admin.CreateDeliveryUser(dto.DeliveryUserRequest{Phone: "+919876540099", StoreID: &storeIDStr})
+	if err != nil {
+		t.Fatalf("CreateDeliveryUser with store_id: %v", err)
+	}
+	assigned, err := f.commerce.IsAssigned(nil, uuid.MustParse(user.ID), f.storeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !assigned {
+		t.Fatal("rider should be assigned after atomic create+assign")
+	}
+}
+
+// H-004: re-creating with same phone+store is idempotent.
+func TestCreateDeliveryUserDuplicateAssignmentIsIdempotent(t *testing.T) {
+	f := newLifecycleFixture(t, 10)
+	storeIDStr := f.storeID.String()
+	admin := NewAdminService(f.db, repository.NewUserRepository(f.db), f.catalog, f.commerce)
+
+	if _, err := admin.CreateDeliveryUser(dto.DeliveryUserRequest{Phone: "+919876540088", StoreID: &storeIDStr}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.CreateDeliveryUser(dto.DeliveryUserRequest{Phone: "+919876540088", StoreID: &storeIDStr}); err != nil {
+		t.Fatalf("second call should be idempotent: %v", err)
+	}
+}
+
+// H-003: Anonymize resets role so a deleted admin does not block new admin creation.
+func TestAnonymizeResetsAdminRole(t *testing.T) {
+	db := commerceTestDB(t)
+	users := repository.NewUserRepository(db)
+	now := time.Now().UTC()
+	adminID := uuid.New()
+	if err := db.Create(&domain.User{ID: adminID, Phone: "+919876541111", Role: "admin", Status: "active", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := users.Anonymize(nil, adminID); err != nil {
+		t.Fatalf("anonymize: %v", err)
+	}
+	var u domain.User
+	if err := db.Unscoped().First(&u, "id = ?", adminID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if u.Role != "customer" {
+		t.Fatalf("Anonymize should reset role to 'customer', got %q", u.Role)
+	}
+	if u.Status != "deleted" {
+		t.Fatalf("Anonymize should set status='deleted', got %q", u.Status)
 	}
 }

@@ -54,8 +54,11 @@ type CreateOrderRequest struct {
 }
 
 type DeliveryUserRequest struct {
-	Phone string  `json:"phone"`
-	Name  *string `json:"name"`
+	Phone   string  `json:"phone"`
+	Name    *string `json:"name"`
+	// StoreID, when set, assigns the new rider to that store in the same
+	// transaction so a partial failure cannot leave an unassigned user (H-004).
+	StoreID *string `json:"store_id"`
 }
 
 type CompleteOrderRequest struct {

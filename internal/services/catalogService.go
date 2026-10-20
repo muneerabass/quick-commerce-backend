@@ -381,42 +381,79 @@ func (s *AdminService) CreateDeliveryUser(request dto.DeliveryUserRequest) (dto.
 	if err != nil {
 		return dto.UserResponseDto{}, err
 	}
-	user, err := s.users.FindByPhone(nil, phone)
-	if errors.Is(err, repository.ErrNotFound) {
-		now := time.Now().UTC()
-		user = &domain.User{ID: uuid.New(), Phone: phone, Role: "delivery", Status: "active", CreatedAt: now, UpdatedAt: now}
-		if request.Name != nil {
-			name := strings.TrimSpace(*request.Name)
-			if len(name) > 120 {
-				return dto.UserResponseDto{}, fmt.Errorf("%w: name must be at most 120 characters", ErrInvalidInput)
-			}
-			if name != "" {
-				user.Name = &name
-			}
+
+	// Validate optional store_id up-front, before opening the transaction.
+	var storeID *uuid.UUID
+	if request.StoreID != nil {
+		sid, err := uuid.Parse(strings.TrimSpace(*request.StoreID))
+		if err != nil {
+			return dto.UserResponseDto{}, fmt.Errorf("%w: store_id is not a valid UUID", ErrInvalidInput)
 		}
-		if err := s.users.Create(nil, user); err != nil {
+		if _, err := s.catalog.FindStore(nil, sid); err != nil {
 			return dto.UserResponseDto{}, err
 		}
-	} else if err != nil {
+		storeID = &sid
+	}
+
+	var user *domain.User
+	// H-004: wrap user upsert and the optional store assignment in a single
+	// transaction so a failed assignment can never leave an orphaned rider.
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		existing, findErr := s.users.FindByPhone(tx, phone)
+		if errors.Is(findErr, repository.ErrNotFound) {
+			now := time.Now().UTC()
+			existing = &domain.User{ID: uuid.New(), Phone: phone, Role: "delivery", Status: "active", CreatedAt: now, UpdatedAt: now}
+			if request.Name != nil {
+				name := strings.TrimSpace(*request.Name)
+				if len(name) > 120 {
+					return fmt.Errorf("%w: name must be at most 120 characters", ErrInvalidInput)
+				}
+				if name != "" {
+					existing.Name = &name
+				}
+			}
+			if err := s.users.Create(tx, existing); err != nil {
+				return err
+			}
+		} else if findErr != nil {
+			return findErr
+		} else {
+			if existing.Role == "admin" {
+				return fmt.Errorf("%w: admin cannot be a delivery user", ErrInvalidRole)
+			}
+			existing.Role = "delivery"
+			if request.Name != nil {
+				name := strings.TrimSpace(*request.Name)
+				if len(name) > 120 {
+					return fmt.Errorf("%w: name must be at most 120 characters", ErrInvalidInput)
+				}
+				if name != "" {
+					existing.Name = &name
+				}
+			}
+			existing.UpdatedAt = time.Now().UTC()
+			if err := s.users.Update(tx, existing); err != nil {
+				return err
+			}
+		}
+		user = existing
+		if storeID != nil {
+			already, err := s.commerce.IsAssigned(tx, user.ID, *storeID)
+			if err != nil {
+				return err
+			}
+			if !already {
+				if err := s.commerce.CreateAssignment(tx, &domain.DeliveryStoreAssignment{
+					ID: uuid.New(), DeliveryID: user.ID, StoreID: *storeID, CreatedAt: time.Now().UTC(),
+				}); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return dto.UserResponseDto{}, err
-	} else {
-		if user.Role == "admin" {
-			return dto.UserResponseDto{}, fmt.Errorf("%w: admin cannot be a delivery user", ErrInvalidRole)
-		}
-		user.Role = "delivery"
-		if request.Name != nil {
-			name := strings.TrimSpace(*request.Name)
-			if len(name) > 120 {
-				return dto.UserResponseDto{}, fmt.Errorf("%w: name must be at most 120 characters", ErrInvalidInput)
-			}
-			if name != "" {
-				user.Name = &name
-			}
-		}
-		user.UpdatedAt = time.Now().UTC()
-		if err := s.users.Update(nil, user); err != nil {
-			return dto.UserResponseDto{}, err
-		}
 	}
 	return userResponse(user), nil
 }

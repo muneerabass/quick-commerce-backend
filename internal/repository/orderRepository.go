@@ -149,18 +149,30 @@ func (r *commerceRepository) ListStalePendingOrderIDs(db *gorm.DB, cutoff time.T
 	return ids, err
 }
 
-// RecordWrongDeliveryCode bumps the failed-attempt counter and returns the new count.
-func (r *commerceRepository) RecordWrongDeliveryCode(db *gorm.DB, orderID uuid.UUID) (int, error) {
+// RecordWrongDeliveryCode atomically increments the failed-attempt counter only
+// when it is still below max (M-003). The WHERE clause makes the check and the
+// increment a single atomic operation: two concurrent wrong-code requests cannot
+// both push the counter past the limit.
+//
+// Returns the new attempt count, or max when the counter was already at or above
+// max (the increment was skipped in that case).
+func (r *commerceRepository) RecordWrongDeliveryCode(db *gorm.DB, orderID uuid.UUID, max int) (int, error) {
 	conn := dbOrDefault(db, r.db)
-	if err := conn.Model(&domain.Order{}).Where("id = ?", orderID).
-		UpdateColumn("delivery_code_attempts", gorm.Expr("delivery_code_attempts + 1")).Error; err != nil {
+	result := conn.Model(&domain.Order{}).
+		Where("id = ? AND delivery_code_attempts < ?", orderID, max).
+		UpdateColumn("delivery_code_attempts", gorm.Expr("delivery_code_attempts + 1"))
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	if result.RowsAffected == 0 {
+		// Already at or past the limit; did not increment.
+		return max, nil
+	}
+	var updated domain.Order
+	if err := conn.Select("delivery_code_attempts").Where("id = ?", orderID).First(&updated).Error; err != nil {
 		return 0, err
 	}
-	var order domain.Order
-	if err := conn.Select("id", "delivery_code_attempts").Where("id = ?", orderID).First(&order).Error; err != nil {
-		return 0, err
-	}
-	return order.DeliveryCodeAttempts, nil
+	return updated.DeliveryCodeAttempts, nil
 }
 
 func (r *commerceRepository) AppendOrderEvent(db *gorm.DB, event *domain.OrderEvent) error {
