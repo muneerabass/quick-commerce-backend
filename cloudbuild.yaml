@@ -1,0 +1,56 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - -t
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - -t
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest'
+      - .
+
+  # Push both tags
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - push
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - '${_SERVICE}'
+      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--port=8080'
+      - '--min-instances=0'
+      - '--max-instances=3'
+      - '--concurrency=80'
+      - '--cpu=1'
+      - '--memory=512Mi'
+      - '--timeout=30'
+      - '--set-secrets=DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,OTP_HASH_SECRET=OTP_HASH_SECRET:latest,TWO_FACTOR_API_KEY=TWO_FACTOR_API_KEY:latest,GOOGLE_MAPS_PLATFORM_KEY=GOOGLE_MAPS_PLATFORM_KEY:latest,CLOUDINARY_CLOUD_NAME=CLOUDINARY_CLOUD_NAME:latest,CLOUDINARY_API_KEY=CLOUDINARY_API_KEY:latest,CLOUDINARY_API_SECRET=CLOUDINARY_API_SECRET:latest,DELIVERY_CODE_SECRET=DELIVERY_CODE_SECRET:latest,ALLOWED_ORIGINS=ALLOWED_ORIGINS:latest'
+      - '--set-env-vars=APP_ENV=production,DEV_OTP_LOG=false,TWO_FACTOR_TEMPLATE=OTP1,TWO_FACTOR_BASE_URL=https://2factor.in,GOOGLE_MAPS_BASE_URL=https://maps.googleapis.com,ACCESS_TOKEN_TTL=15m,REFRESH_TOKEN_TTL=720h,OTP_TTL=5m,OTP_RESEND_AFTER=60s,OTP_MAX_ATTEMPTS=5'
+      - '--set-env-vars=ADMIN_PHONE=${_ADMIN_PHONE}'
+      - '--add-cloudsql-instances=${_CLOUDSQL_INSTANCE}'
+      - '--service-account=${_SA_EMAIL}'
+      - '--allow-unauthenticated'
+
+images:
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest'
+
+substitutions:
+  _REGION: asia-south1
+  _REPO: quick-commerce
+  _SERVICE: quick-commerce-api
+  _ADMIN_PHONE: '+919999999999'
+  _CLOUDSQL_INSTANCE: ''   # e.g. my-project:asia-south1:quick-commerce-pg
+  _SA_EMAIL: ''            # e.g. quick-commerce-run@my-project.iam.gserviceaccount.com
+
+options:
+  logging: CLOUD_LOGGING_ONLY
