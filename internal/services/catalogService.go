@@ -84,6 +84,38 @@ func (s *CatalogService) ProductsForPincode(pincode string) (dto.PincodeCatalogR
 	return response, nil
 }
 
+// GetProduct returns the full catalog detail for a single product, including
+// its store name, category name, and live stock quantity. It is used by the
+// product-detail screen when the product is not yet in the client catalog cache.
+func (s *CatalogService) GetProduct(id uuid.UUID) (dto.CatalogProductResponse, error) {
+	product, err := s.catalog.FindProductInventory(nil, id)
+	if err != nil {
+		return dto.CatalogProductResponse{}, err
+	}
+	var categoryID *string
+	if product.CategoryID != nil {
+		value := product.CategoryID.String()
+		categoryID = &value
+	}
+	images := product.Images
+	if images == nil {
+		images = []string{}
+	}
+	return dto.CatalogProductResponse{
+		ID:           product.ID.String(),
+		StoreID:      product.StoreID.String(),
+		StoreName:    product.StoreName,
+		Name:         product.Name,
+		Description:  product.Description,
+		Price:        product.Price,
+		ImageURL:     product.ImageURL,
+		Images:       images,
+		CategoryID:   categoryID,
+		CategoryName: product.CategoryName,
+		Quantity:     product.Quantity,
+	}, nil
+}
+
 type AdminService struct {
 	db       *gorm.DB
 	users    repository.UserRepository

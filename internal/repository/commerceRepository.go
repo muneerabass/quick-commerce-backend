@@ -21,6 +21,7 @@ type CatalogRepository interface {
 	CreateStore(db *gorm.DB, store *domain.Store) error
 	UpdateStore(db *gorm.DB, store *domain.Store) error
 	FindProduct(db *gorm.DB, id uuid.UUID) (*domain.Product, error)
+	FindProductInventory(db *gorm.DB, id uuid.UUID) (*domain.ProductInventory, error)
 	CreateProduct(db *gorm.DB, product *domain.Product) error
 	UpdateProduct(db *gorm.DB, product *domain.Product) error
 	ListProductsForPincode(db *gorm.DB, pincode string) ([]domain.ProductInventory, error)
@@ -100,6 +101,28 @@ func (r *catalogRepository) FindProduct(db *gorm.DB, id uuid.UUID) (*domain.Prod
 		return nil, ErrNotFound
 	}
 	return &product, err
+}
+
+// FindProductInventory fetches a single product with its store name, category
+// name, and stock quantity. Used for product-detail deep links where the item
+// may not yet be in the client's local catalog cache.
+func (r *catalogRepository) FindProductInventory(db *gorm.DB, id uuid.UUID) (*domain.ProductInventory, error) {
+	var row domain.ProductInventory
+	err := dbOrDefault(db, r.db).Table("products").Select(
+		"products.id, products.store_id, products.name, products.description, products.price, products.image_url, products.images, products.category_id, products.created_at, COALESCE(inventory.quantity, 0) AS quantity, stores.name AS store_name, categories.name AS category_name",
+	).
+		Joins("JOIN stores ON stores.id = products.store_id").
+		Joins("LEFT JOIN inventory ON inventory.product_id = products.id AND inventory.store_id = products.store_id").
+		Joins("LEFT JOIN categories ON categories.id = products.category_id").
+		Where("products.id = ?", id).
+		Scan(&row).Error
+	if err != nil {
+		return nil, err
+	}
+	if row.ID == uuid.Nil {
+		return nil, ErrNotFound
+	}
+	return &row, nil
 }
 
 func (r *catalogRepository) CreateProduct(db *gorm.DB, product *domain.Product) error {

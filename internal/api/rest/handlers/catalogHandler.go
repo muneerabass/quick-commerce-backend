@@ -30,6 +30,7 @@ func SetupCatalogRoutes(rh *rest.RestHandler, auth *services.AuthService, delive
 
 	api := rh.App.Group("/api/v1")
 	api.Get("/catalog/products", h.Products)
+	api.Get("/catalog/products/:productID", h.GetProduct)
 
 	authenticated := middleware.RequireAuth(auth.TokenService(), auth.ValidateAccessSession)
 	adminRoutes := api.Group("/admin", authenticated, middleware.RequireRole(auth.UserRole, "admin"))
@@ -103,6 +104,20 @@ func (h *CatalogHandler) Products(c *fiber.Ctx) error {
 		return serviceError(c, err)
 	}
 	return c.JSON(catalog)
+}
+
+// GetProduct fetches a single product by ID. Used by deep links and by the
+// product-detail screen when the product is not yet in the client catalog cache.
+func (h *CatalogHandler) GetProduct(c *fiber.Ctx) error {
+	id, err := parseParamUUID(c, "productID")
+	if err != nil {
+		return serviceError(c, err)
+	}
+	product, err := h.catalog.GetProduct(id)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(product)
 }
 
 func (h *CatalogHandler) CreateStore(c *fiber.Ctx) error {
