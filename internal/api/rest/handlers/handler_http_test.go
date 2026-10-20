@@ -309,10 +309,10 @@ func TestUnknownRouteReturns404(t *testing.T) {
 
 func TestHealthzEndpoint(t *testing.T) {
 	app := fiber.New(fiber.Config{ErrorHandler: JSONErrorHandler})
-	app.Get("/healthz", func(c *fiber.Ctx) error {
+	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "ok"})
 	})
-	req := httptest.NewRequest("GET", "/healthz", nil)
+	req := httptest.NewRequest("GET", "/health", nil)
 	resp, err := app.Test(req, -1)
 	if err != nil {
 		t.Fatal(err)

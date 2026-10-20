@@ -61,7 +61,7 @@ func StartServer(config *configs.AppConfig) error {
 	if err := migrations.Run(db); err != nil {
 		return fmt.Errorf("failed to run database migrations: %w", err)
 	}
-	app.Get("/healthz", func(c *fiber.Ctx) error {
+	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "ok"})
 	})
 
