@@ -65,4 +65,4 @@ substitutions:
   _SA_EMAIL: 'quick-commerce-run@project-5dababb2-6d66-4348-a84.iam.gserviceaccount.com'
 
 options:
-  logging: LEGACY
+  logging: CLOUD_LOGGING_ONLY
