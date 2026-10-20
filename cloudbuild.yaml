@@ -48,9 +48,9 @@ substitutions:
   _REGION: asia-south1
   _REPO: quick-commerce
   _SERVICE: quick-commerce-api
-  _ADMIN_PHONE: '+919999999999'
-  _CLOUDSQL_INSTANCE: ''   # e.g. my-project:asia-south1:quick-commerce-pg
-  _SA_EMAIL: ''            # e.g. quick-commerce-run@my-project.iam.gserviceaccount.com
+  _ADMIN_PHONE: '+917780879882'
+  _CLOUDSQL_INSTANCE: 'project-5dababb2-6d66-4348-a84:asia-south1:quick-commerce-pg'
+  _SA_EMAIL: 'quick-commerce-run@project-5dababb2-6d66-4348-a84.iam.gserviceaccount.com'
 
 options:
   logging: CLOUD_LOGGING_ONLY
