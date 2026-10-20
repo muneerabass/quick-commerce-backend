@@ -449,3 +449,27 @@ func TestOrderListPagination(t *testing.T) {
 		t.Fatalf("last page should hold 1 and no cursor: %+v err=%v", last, err)
 	}
 }
+
+func TestDefaultAddressCanBeEdited(t *testing.T) {
+	db := testDB(t)
+	users := repository.NewUserRepository(db)
+	svc := NewAddressService(db, users, repository.NewAddressRepository(db))
+	userID := uuid.New()
+	now := time.Now().UTC()
+	if err := db.Create(&domain.User{ID: userID, Phone: "+919876549999", Role: "customer", Status: "active", CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	home, err := svc.Create(userID, dto.AddressRequest{Label: "Home", RecipientName: "A", Phone: "+919876549999", AddressLine1: "1 Rd", City: "BLR", State: "KA", Pincode: "560001"})
+	if err != nil || !home.IsDefault {
+		t.Fatalf("first address should be the default: %+v err=%v", home, err)
+	}
+	landmark, notDefault := "Near the park", false
+	// The app used to send is_default=false on every edit, which the API rejected.
+	edited, err := svc.Update(userID, uuid.MustParse(home.ID), dto.AddressPatchRequest{Landmark: &landmark, IsDefault: &notDefault})
+	if err != nil {
+		t.Fatalf("editing the default address must work: %v", err)
+	}
+	if !edited.IsDefault || edited.Landmark == nil || *edited.Landmark != landmark {
+		t.Fatalf("edit should apply and keep it the default: %+v", edited)
+	}
+}

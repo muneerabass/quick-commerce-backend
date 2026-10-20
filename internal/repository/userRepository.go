@@ -18,6 +18,7 @@ type UserRepository interface {
 	Create(db *gorm.DB, user *domain.User) error
 	Update(db *gorm.DB, user *domain.User) error
 	Anonymize(db *gorm.DB, id uuid.UUID) error
+	ListDeliveryForStore(db *gorm.DB, storeID uuid.UUID) ([]*domain.User, error)
 }
 
 type userRepository struct{ db *gorm.DB }
@@ -87,6 +88,15 @@ func (r *userRepository) Anonymize(db *gorm.DB, id uuid.UUID) error {
 		}
 	}
 	return nil
+}
+
+func (r *userRepository) ListDeliveryForStore(db *gorm.DB, storeID uuid.UUID) ([]*domain.User, error) {
+	var users []*domain.User
+	err := dbOrDefault(db, r.db).
+		Joins("JOIN delivery_store_assignments ON delivery_store_assignments.delivery_id = users.id").
+		Where("delivery_store_assignments.store_id = ? AND users.role = ? AND users.status <> ?", storeID, "delivery", "deleted").
+		Find(&users).Error
+	return users, err
 }
 
 type OTPRepository interface {

@@ -421,6 +421,18 @@ func (s *AdminService) CreateDeliveryUser(request dto.DeliveryUserRequest) (dto.
 	return userResponse(user), nil
 }
 
+func (s *AdminService) ListDeliveryUsers(storeID uuid.UUID) ([]dto.UserResponseDto, error) {
+	users, err := s.users.ListDeliveryForStore(nil, storeID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]dto.UserResponseDto, 0, len(users))
+	for _, u := range users {
+		result = append(result, userResponse(u))
+	}
+	return result, nil
+}
+
 func (s *AdminService) AssignDeliveryUser(deliveryID, storeID uuid.UUID) error {
 	user, err := s.users.FindByID(nil, deliveryID)
 	if err != nil {

@@ -123,7 +123,13 @@ func (h *UserHandler) Logout(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
+// LastDevOTP is a local development aid. It refuses requests that arrive through
+// a proxy or tunnel (ngrok, a load balancer), which always add X-Forwarded-For, so
+// exposing the server publicly never exposes login codes.
 func (h *UserHandler) LastDevOTP(c *fiber.Ctx) error {
+	if c.Get(fiber.HeaderXForwardedFor) != "" || c.Get("X-Forwarded-Host") != "" {
+		return writeError(c, fiber.StatusNotFound, "not found")
+	}
 	phone := c.Query("phone")
 	if phone == "" {
 		return writeError(c, fiber.StatusBadRequest, "phone is required")

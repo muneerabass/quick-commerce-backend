@@ -115,9 +115,10 @@ func (s *AddressService) Update(userID, addressID uuid.UUID, request dto.Address
 				return err
 			}
 			address.IsDefault = true
-		} else if request.IsDefault != nil && !*request.IsDefault && address.IsDefault {
-			return fmt.Errorf("%w: default address cannot be unset without selecting another default", ErrInvalidInput)
 		}
+		// is_default=false on the current default is a no-op, not an error: the
+		// default only moves when another address is made the default. This lets
+		// the default address be edited like any other.
 		if err := s.addrs.Update(tx, userID, address); err != nil {
 			return err
 		}

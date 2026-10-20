@@ -46,6 +46,7 @@ func SetupCatalogRoutes(rh *rest.RestHandler, auth *services.AuthService) {
 	adminRoutes.Post("/orders/:orderID/cancel", h.CancelOrder)
 	adminRoutes.Post("/orders/:orderID/reassign", h.ReassignOrder)
 	adminRoutes.Post("/delivery-users", h.CreateDeliveryUser)
+	adminRoutes.Get("/stores/:storeID/delivery-users", h.ListDeliveryUsers)
 	adminRoutes.Put("/delivery-users/:deliveryID/stores/:storeID", h.AssignDeliveryUser)
 	adminRoutes.Delete("/delivery-users/:deliveryID/stores/:storeID", h.RemoveDeliveryAssignment)
 }
@@ -190,6 +191,18 @@ func (h *CatalogHandler) CreateDeliveryUser(c *fiber.Ctx) error {
 		return serviceError(c, err)
 	}
 	return c.Status(fiber.StatusCreated).JSON(user)
+}
+
+func (h *CatalogHandler) ListDeliveryUsers(c *fiber.Ctx) error {
+	storeID, err := parseParamUUID(c, "storeID")
+	if err != nil {
+		return serviceError(c, err)
+	}
+	users, err := h.admin.ListDeliveryUsers(storeID)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(fiber.Map{"delivery_users": users})
 }
 
 func (h *CatalogHandler) AssignDeliveryUser(c *fiber.Ctx) error {
