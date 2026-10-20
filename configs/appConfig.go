@@ -36,6 +36,16 @@ type AppConfig struct {
 	CloudinaryCloudName   string
 	CloudinaryAPIKey      string
 	CloudinaryAPISecret   string
+	// AllowedOrigins is a comma-separated list of CORS origins (e.g.
+	// "https://app.example.com,https://admin.example.com"). An empty value
+	// allows all origins in development and is rejected in production (M-007).
+	// Native mobile (React Native/Expo) clients do not require CORS but web
+	// clients and browser-based admin tools do.
+	AllowedOrigins string
+	// DeliveryCodeSecret is the HMAC key for hashing delivery codes (L-004).
+	// Defaults to JWTSecret when unset. Set DELIVERY_CODE_SECRET explicitly in
+	// production to allow independent rotation.
+	DeliveryCodeSecret string
 }
 
 func LoadSettings() (AppConfig, error) {
@@ -64,13 +74,36 @@ func LoadSettings() (AppConfig, error) {
 	if len(jwtSecret) < 32 {
 		return AppConfig{}, fmt.Errorf("JWT_SECRET environment variable must be at least 32 characters")
 	}
+	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	isProduction := appEnv == "production"
+
 	otpHashSecret := os.Getenv("OTP_HASH_SECRET")
 	if otpHashSecret == "" {
 		otpHashSecret = jwtSecret
 	}
 
-	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
-	isProduction := appEnv == "production"
+	// M-004: In production the OTP hash secret must be explicitly set and must
+	// differ from the JWT secret. Sharing the two secrets means a leaked JWT
+	// secret would also expose OTP hashes.
+	if isProduction {
+		if os.Getenv("OTP_HASH_SECRET") == "" {
+			return AppConfig{}, fmt.Errorf("OTP_HASH_SECRET must be set in production (cannot fall back to JWT_SECRET)")
+		}
+		if otpHashSecret == jwtSecret {
+			return AppConfig{}, fmt.Errorf("OTP_HASH_SECRET must be distinct from JWT_SECRET in production")
+		}
+	}
+
+	// M-007: Restrict CORS in production. An empty ALLOWED_ORIGINS fails startup
+	// so the server never accidentally runs with wildcard "*" in production.
+	// In development the empty value is allowed (server.go uses "*" as fallback).
+	// NOTE: native React Native / Expo clients do not send Origin headers and are
+	// unaffected by CORS; this setting only matters for web / browser clients.
+	allowedOrigins := os.Getenv("ALLOWED_ORIGINS")
+	if isProduction && strings.TrimSpace(allowedOrigins) == "" {
+		return AppConfig{}, fmt.Errorf("ALLOWED_ORIGINS must be set in production (comma-separated list of allowed web origins)")
+	}
+
 	devOTPLog := boolFromEnv("DEV_OTP_LOG", false)
 	if isProduction && devOTPLog {
 		return AppConfig{}, fmt.Errorf("DEV_OTP_LOG must not be enabled when APP_ENV=production: " +
@@ -102,6 +135,8 @@ func LoadSettings() (AppConfig, error) {
 		CloudinaryCloudName:   os.Getenv("CLOUDINARY_CLOUD_NAME"),
 		CloudinaryAPIKey:      os.Getenv("CLOUDINARY_API_KEY"),
 		CloudinaryAPISecret:   os.Getenv("CLOUDINARY_API_SECRET"),
+		AllowedOrigins:        allowedOrigins,
+		DeliveryCodeSecret:    envOrDefault("DELIVERY_CODE_SECRET", jwtSecret),
 	}
 	return cfg, nil
 }

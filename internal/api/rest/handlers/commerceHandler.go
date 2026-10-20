@@ -20,11 +20,14 @@ type CommerceHandler struct {
 	orders *services.OrderService
 }
 
-func SetupCommerceRoutes(rh *rest.RestHandler, auth *services.AuthService) {
+func SetupCommerceRoutes(rh *rest.RestHandler, auth *services.AuthService, deliveryCodeSecret string) {
 	catalog := repository.NewCatalogRepository(rh.Db)
 	commerce := repository.NewCommerceRepository(rh.Db)
 	addresses := repository.NewAddressRepository(rh.Db)
-	h := &CommerceHandler{cart: services.NewCartService(rh.Db, catalog, commerce).WithAddresses(addresses), orders: services.NewOrderService(rh.Db, addresses, catalog, commerce)}
+	h := &CommerceHandler{
+		cart:   services.NewCartService(rh.Db, catalog, commerce).WithAddresses(addresses),
+		orders: services.NewOrderService(rh.Db, addresses, catalog, commerce).WithDeliveryCodeSecret(deliveryCodeSecret),
+	}
 
 	api := rh.App.Group("/api/v1")
 	authenticated := middleware.RequireAuth(auth.TokenService(), auth.ValidateAccessSession)

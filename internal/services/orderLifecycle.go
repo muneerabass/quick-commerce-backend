@@ -2,8 +2,11 @@ package services
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -206,12 +209,40 @@ func buildCartView(db *gorm.DB, catalog repository.CatalogRepository, commerce r
 	return view, nil
 }
 
+// generateDeliveryCode returns a random 6-digit plaintext code (L-004).
 func generateDeliveryCode() (string, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(10000))
+	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%04d", n.Int64()), nil
+	return fmt.Sprintf("%06d", n.Int64()), nil
+}
+
+// hashDeliveryCode produces an "hmac:<hex>" string so that callers can
+// distinguish hashed codes from legacy plaintext codes (L-004/L-006).
+// Including the order ID in the HMAC message binds each hash to exactly one
+// order, preventing cross-order code reuse.
+// When secret is empty (no WithDeliveryCodeSecret call), falls back to a plain
+// SHA-256 — still not stored in plaintext, but weaker. Callers should always
+// provide a secret in production.
+func hashDeliveryCode(secret []byte, orderID uuid.UUID, code string) string {
+	msg := orderID.String() + ":" + code
+	var digest []byte
+	if len(secret) > 0 {
+		mac := hmac.New(sha256.New, secret)
+		_, _ = mac.Write([]byte(msg))
+		digest = mac.Sum(nil)
+	} else {
+		sum := sha256.Sum256([]byte(msg))
+		digest = sum[:]
+	}
+	return "hmac:" + hex.EncodeToString(digest)
+}
+
+// isHashedDeliveryCode reports whether the stored code was produced by
+// hashDeliveryCode (and should never be returned to the client in plaintext).
+func isHashedDeliveryCode(stored string) bool {
+	return strings.HasPrefix(stored, "hmac:")
 }
 
 func (s *OrderService) recordEvent(tx *gorm.DB, orderID uuid.UUID, status string, actorID *uuid.UUID, role, note string) error {
@@ -366,6 +397,9 @@ func StartOrderSweeper(ctx context.Context, orders *OrderService, interval time.
 }
 
 // verifyDeliveryCode checks the customer's code, counting wrong tries.
+// It handles two stored formats:
+//   - "hmac:<hex>": new format — hash the input and compare (L-004/L-006).
+//   - anything else: legacy plaintext — compare directly (safe migration path).
 func (s *OrderService) verifyDeliveryCode(order *domain.Order, code string) error {
 	if order.DeliveryCode == "" { // legacy order placed before codes existed
 		return nil
@@ -380,7 +414,16 @@ func (s *OrderService) verifyDeliveryCode(order *domain.Order, code string) erro
 	if code == "" {
 		return fmt.Errorf("%w: enter the delivery code the customer shows you", ErrInvalidInput)
 	}
-	if subtle.ConstantTimeCompare([]byte(code), []byte(order.DeliveryCode)) == 1 {
+	var match bool
+	if isHashedDeliveryCode(order.DeliveryCode) {
+		// New HMAC path: hash the submitted code and compare with stored hash.
+		want := hashDeliveryCode(s.codeSecret, order.ID, code)
+		match = subtle.ConstantTimeCompare([]byte(want), []byte(order.DeliveryCode)) == 1
+	} else {
+		// Legacy plaintext path for orders created before L-004 (safe migration).
+		match = subtle.ConstantTimeCompare([]byte(code), []byte(order.DeliveryCode)) == 1
+	}
+	if match {
 		return nil
 	}
 	// M-003: the increment is atomic — the WHERE clause in RecordWrongDeliveryCode
@@ -426,8 +469,13 @@ func (s *OrderService) mapOrderDetail(order *domain.Order, viewer orderViewer) (
 			response.Rider = &dto.RiderInfo{Name: rider.Name, Phone: rider.Phone}
 		}
 	}
+	// L-004/L-006: only return the delivery code to the customer when it is still
+	// in plaintext (legacy orders). Hashed codes are never returned; the customer
+	// received the plaintext once at order creation (in OrderService.Create).
 	if viewer == viewerCustomer && (order.Status == "pending" || order.Status == "accepted") {
-		response.DeliveryCode = order.DeliveryCode
+		if !isHashedDeliveryCode(order.DeliveryCode) {
+			response.DeliveryCode = order.DeliveryCode
+		}
 	}
 	return response, nil
 }

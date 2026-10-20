@@ -26,8 +26,15 @@ import (
 func StartServer(config *configs.AppConfig) error {
 	app := fiber.New(fiber.Config{ErrorHandler: handlers.JSONErrorHandler, BodyLimit: 2 * 1024 * 1024})
 	app.Use(recover.New())
+	// M-007: Use a configurable origin allowlist. In production ALLOWED_ORIGINS
+	// must be set (enforced in LoadSettings). In development the empty value
+	// falls back to "*" so the local dev server works without extra config.
+	corsOrigins := config.AllowedOrigins
+	if corsOrigins == "" {
+		corsOrigins = "*"
+	}
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
+		AllowOrigins: corsOrigins,
 		AllowHeaders: "Origin,Content-Type,Accept,Authorization",
 		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 	}))

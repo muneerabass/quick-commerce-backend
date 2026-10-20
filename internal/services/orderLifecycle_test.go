@@ -144,8 +144,8 @@ func TestFeesAreComputedOnTheServerAndStoredOnTheOrder(t *testing.T) {
 	if order.SubtotalAmount != 20000 || order.DeliveryFee != 0 || order.HandlingFee != 400 || order.TotalAmount != 20400 || order.AmountToCollect != 20400 {
 		t.Fatalf("order must store the same fees the cart showed: %+v", order)
 	}
-	if order.DeliveryCode == "" || len(order.DeliveryCode) != 4 {
-		t.Fatalf("customer should receive a 4-digit delivery code, got %q", order.DeliveryCode)
+	if order.DeliveryCode == "" || len(order.DeliveryCode) != 6 {
+		t.Fatalf("customer should receive a 6-digit delivery code at creation, got %q", order.DeliveryCode)
 	}
 }
 

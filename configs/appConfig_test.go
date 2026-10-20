@@ -42,6 +42,9 @@ func TestLoadSettingsAllowsProductionWithoutDevOTPLog(t *testing.T) {
 	minimalEnv(t)
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("DEV_OTP_LOG", "false")
+	// M-004/M-007: production requires distinct OTP_HASH_SECRET and ALLOWED_ORIGINS.
+	t.Setenv("OTP_HASH_SECRET", "different-otp-hash-secret-at-least-32-chars!")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
 
 	cfg, err := LoadSettings()
 	if err != nil {
@@ -49,5 +52,42 @@ func TestLoadSettingsAllowsProductionWithoutDevOTPLog(t *testing.T) {
 	}
 	if cfg.DevOTPLog {
 		t.Error("expected DevOTPLog=false for production config")
+	}
+}
+
+// TestLoadSettingsRequiresDistinctOTPSecretInProduction verifies M-004.
+func TestLoadSettingsRequiresDistinctOTPSecretInProduction(t *testing.T) {
+	minimalEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("ALLOWED_ORIGINS", "https://app.example.com")
+	// OTP_HASH_SECRET missing → must fail.
+	if _, err := LoadSettings(); err == nil {
+		t.Fatal("expected error when OTP_HASH_SECRET is missing in production")
+	}
+	// OTP_HASH_SECRET same as JWT_SECRET → must fail.
+	t.Setenv("OTP_HASH_SECRET", "test-jwt-secret-must-be-at-least-32-chars!!")
+	if _, err := LoadSettings(); err == nil {
+		t.Fatal("expected error when OTP_HASH_SECRET equals JWT_SECRET in production")
+	}
+}
+
+// TestLoadSettingsRequiresAllowedOriginsInProduction verifies M-007.
+func TestLoadSettingsRequiresAllowedOriginsInProduction(t *testing.T) {
+	minimalEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("OTP_HASH_SECRET", "different-otp-hash-secret-at-least-32-chars!")
+	// ALLOWED_ORIGINS missing → must fail.
+	if _, err := LoadSettings(); err == nil {
+		t.Fatal("expected error when ALLOWED_ORIGINS is missing in production")
+	}
+}
+
+// TestLoadSettingsDevAllowsNoAllowedOrigins verifies that development does not
+// require ALLOWED_ORIGINS (it falls back to "*" in server.go) (M-007).
+func TestLoadSettingsDevAllowsNoAllowedOrigins(t *testing.T) {
+	minimalEnv(t)
+	t.Setenv("APP_ENV", "development")
+	if _, err := LoadSettings(); err != nil {
+		t.Fatalf("unexpected error in development without ALLOWED_ORIGINS: %v", err)
 	}
 }

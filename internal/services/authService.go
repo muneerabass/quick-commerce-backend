@@ -57,6 +57,17 @@ func (DevStdoutOTPSender) Send(_ context.Context, phone, otp string) error {
 	return nil
 }
 
+// ipBucket is an in-process per-IP OTP send counter for a single sliding window.
+// NOTE (M-005): these counters are per-instance. A deployment with multiple
+// replicas or horizontal scaling will not aggregate counts across instances.
+// For global enforcement, consider a shared Redis counter. The per-phone daily
+// cap uses the database and IS globally enforced.
+type ipBucket struct {
+	mu    sync.Mutex
+	count int
+	reset time.Time
+}
+
 type AuthService struct {
 	db          *gorm.DB
 	users       repository.UserRepository
@@ -72,6 +83,7 @@ type AuthService struct {
 	adminPhone  string
 	devOTPLog   bool
 	lastOTPs    sync.Map // phone -> string (last plaintext OTP, dev only)
+	ipBuckets   sync.Map // string(ip) -> *ipBucket
 }
 
 func (s *AuthService) SetDevOTPLog(enabled bool) { s.devOTPLog = enabled }
@@ -132,7 +144,37 @@ func (s *AuthService) ValidateAccessSession(userID, sessionID uuid.UUID) error {
 	return nil
 }
 
-func (s *AuthService) SendOTP(ctx context.Context, rawPhone string) error {
+const (
+	otpDailyPhoneLimit = 15 // globally enforced via DB (M-005)
+	otpHourlyIPLimit   = 20 // per-instance only; see ipBucket note above (M-005)
+)
+
+// checkIPLimit returns ErrOTPRateLimited when the IP has sent otpHourlyIPLimit
+// or more OTPs in the current hour (per-instance counter, see ipBucket).
+func (s *AuthService) checkIPLimit(ip string, now time.Time) error {
+	if ip == "" {
+		return nil
+	}
+	windowEnd := now.Truncate(time.Hour).Add(time.Hour)
+	raw, _ := s.ipBuckets.LoadOrStore(ip, &ipBucket{count: 0, reset: windowEnd})
+	b := raw.(*ipBucket)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if now.After(b.reset) {
+		b.count = 0
+		b.reset = windowEnd
+	}
+	if b.count >= otpHourlyIPLimit {
+		return ErrOTPRateLimited
+	}
+	b.count++
+	return nil
+}
+
+// SendOTP generates and delivers an OTP. clientIP is used for the per-IP
+// hourly rate limit (M-005); pass an empty string to skip that check (e.g.
+// in tests).
+func (s *AuthService) SendOTP(ctx context.Context, rawPhone, clientIP string) error {
 	phone, err := NormalizePhone(rawPhone)
 	if err != nil {
 		return err
@@ -142,12 +184,26 @@ func (s *AuthService) SendOTP(ctx context.Context, rawPhone string) error {
 		return err
 	}
 	now := time.Now().UTC()
+	// Per-IP limit is checked before acquiring any DB lock so we fail fast.
+	if err := s.checkIPLimit(clientIP, now); err != nil {
+		return err
+	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		if tx.Dialector.Name() == "postgres" {
 			if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", phone).Error; err != nil {
 				return err
 			}
 		}
+		// M-005: daily per-phone cap (globally enforced via DB).
+		dayStart := now.Truncate(24 * time.Hour)
+		dailyCount, err := s.otps.CountDailyByPhone(tx, phone, dayStart)
+		if err != nil {
+			return err
+		}
+		if dailyCount >= otpDailyPhoneLimit {
+			return ErrOTPRateLimited
+		}
+		// Existing per-hour per-phone cap (5/hour) is preserved.
 		latestCount, err := s.otps.CountRecent(tx, phone, now.Add(-time.Hour))
 		if err != nil {
 			return err

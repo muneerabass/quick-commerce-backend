@@ -21,11 +21,11 @@ type CatalogHandler struct {
 	orders  *services.OrderService
 }
 
-func SetupCatalogRoutes(rh *rest.RestHandler, auth *services.AuthService) {
+func SetupCatalogRoutes(rh *rest.RestHandler, auth *services.AuthService, deliveryCodeSecret string) {
 	catalogRepository := repository.NewCatalogRepository(rh.Db)
 	commerceRepository := repository.NewCommerceRepository(rh.Db)
 	admin := services.NewAdminService(rh.Db, repository.NewUserRepository(rh.Db), catalogRepository, commerceRepository)
-	orders := services.NewOrderService(rh.Db, repository.NewAddressRepository(rh.Db), catalogRepository, commerceRepository)
+	orders := services.NewOrderService(rh.Db, repository.NewAddressRepository(rh.Db), catalogRepository, commerceRepository).WithDeliveryCodeSecret(deliveryCodeSecret)
 	h := &CatalogHandler{catalog: services.NewCatalogService(catalogRepository), admin: admin, orders: orders}
 
 	api := rh.App.Group("/api/v1")

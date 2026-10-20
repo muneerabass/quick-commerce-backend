@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -14,6 +15,10 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+const maxAddressesPerUser = 20
+
+var ErrAddressLimitReached = errors.New("address limit reached: you may store at most 20 addresses")
 
 var pincodePattern = regexp.MustCompile(`^[0-9]{4,10}$`)
 
@@ -78,6 +83,11 @@ func (s *AddressService) Create(userID uuid.UUID, request dto.AddressRequest) (d
 		count, err := s.addrs.Count(tx, userID)
 		if err != nil {
 			return err
+		}
+		// M-006: enforce per-user address cap inside the lock so concurrent
+		// creates cannot race past the limit.
+		if count >= maxAddressesPerUser {
+			return ErrAddressLimitReached
 		}
 		makeDefault := count == 0 || (request.IsDefault != nil && *request.IsDefault)
 		if makeDefault {

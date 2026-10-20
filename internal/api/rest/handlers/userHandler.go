@@ -68,8 +68,8 @@ func SetupUserRoutes(rh *rest.RestHandler, cfg configs.AppConfig) {
 	protected.Delete("/addresses/:addressID", h.DeleteAddress)
 	protected.Put("/addresses/:addressID/default", h.SetDefaultAddress)
 
-	SetupCatalogRoutes(rh, auth)
-	SetupCommerceRoutes(rh, auth)
+	SetupCatalogRoutes(rh, auth, cfg.DeliveryCodeSecret)
+	SetupCommerceRoutes(rh, auth, cfg.DeliveryCodeSecret)
 	SetupUploadsRoutes(rh, cfg, auth)
 }
 
@@ -82,7 +82,7 @@ func (h *UserHandler) SendOTP(c *fiber.Ctx) error {
 	if err := c.BodyParser(&request); err != nil {
 		return writeError(c, fiber.StatusBadRequest, "invalid request body")
 	}
-	if err := h.auth.SendOTP(context.Background(), request.Phone); err != nil {
+	if err := h.auth.SendOTP(context.Background(), request.Phone, c.IP()); err != nil {
 		return serviceError(c, err)
 	}
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"message": "OTP sent"})

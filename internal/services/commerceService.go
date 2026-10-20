@@ -246,14 +246,22 @@ func (s *CartService) mapCart(cart *domain.Cart, address *domain.UserAddress) (d
 }
 
 type OrderService struct {
-	db        *gorm.DB
-	addresses repository.AddressRepository
-	catalog   repository.CatalogRepository
-	commerce  repository.CommerceRepository
+	db         *gorm.DB
+	addresses  repository.AddressRepository
+	catalog    repository.CatalogRepository
+	commerce   repository.CommerceRepository
+	codeSecret []byte // HMAC key for delivery-code hashing (L-004/L-006)
 }
 
 func NewOrderService(db *gorm.DB, addresses repository.AddressRepository, catalog repository.CatalogRepository, commerce repository.CommerceRepository) *OrderService {
 	return &OrderService{db: db, addresses: addresses, catalog: catalog, commerce: commerce}
+}
+
+// WithDeliveryCodeSecret sets the HMAC key used to hash delivery codes (L-004).
+// Must be called before creating any orders that should use hashed codes.
+func (s *OrderService) WithDeliveryCodeSecret(secret string) *OrderService {
+	s.codeSecret = []byte(secret)
+	return s
 }
 
 // Create turns the cart into a COD order. idempotencyKey (optional) makes a
@@ -272,7 +280,7 @@ func (s *OrderService) Create(userID, addressID uuid.UUID, idempotencyKey string
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
-	code, err := generateDeliveryCode()
+	plainCode, err := generateDeliveryCode()
 	if err != nil {
 		return dto.OrderResponse{}, err
 	}
@@ -306,14 +314,19 @@ func (s *OrderService) Create(userID, addressID uuid.UUID, idempotencyKey string
 			return &CartUnavailableError{Issues: view.Response.Issues}
 		}
 		now := time.Now().UTC()
+		orderID := uuid.New()
+		// L-004/L-006: store HMAC hash instead of plaintext. The order ID is
+		// included in the message so the hash is unique per order even if two
+		// orders share the same random digits.
+		codeHash := hashDeliveryCode(s.codeSecret, orderID, plainCode)
 		order = &domain.Order{
-			ID: uuid.New(), UserID: userID, StoreID: *cart.StoreID, Status: "pending", PaymentMethod: "cod", PaymentStatus: "pending",
+			ID: orderID, UserID: userID, StoreID: *cart.StoreID, Status: "pending", PaymentMethod: "cod", PaymentStatus: "pending",
 			SubtotalAmount: view.Response.SubtotalAmount, DeliveryFee: view.Response.DeliveryFee, HandlingFee: view.Response.HandlingFee,
 			TotalAmount:   view.Response.TotalAmount,
 			RecipientName: address.RecipientName, DeliveryPhone: address.Phone, AddressLine1: address.AddressLine1, AddressLine2: address.AddressLine2,
 			Landmark: address.Landmark, City: address.City, State: address.State, Pincode: address.Pincode,
 			Latitude: address.Latitude, Longitude: address.Longitude, DeliveryInstructions: address.DeliveryInstructions,
-			DeliveryCode: code, CreatedAt: now, UpdatedAt: now,
+			DeliveryCode: codeHash, CreatedAt: now, UpdatedAt: now,
 		}
 		if idempotencyKey != "" {
 			order.IdempotencyKey = &idempotencyKey
@@ -356,7 +369,15 @@ func (s *OrderService) Create(userID, addressID uuid.UUID, idempotencyKey string
 		}
 		return dto.OrderResponse{}, err
 	}
-	return s.mapOrderDetail(order, viewerCustomer)
+	resp, err := s.mapOrderDetail(order, viewerCustomer)
+	if err != nil {
+		return dto.OrderResponse{}, err
+	}
+	// L-004/L-006: the delivery code is hashed in the DB; return the plaintext
+	// once here so the customer can note it. Subsequent GETs will not return it
+	// for hashed codes (mapOrderDetail omits them).
+	resp.DeliveryCode = plainCode
+	return resp, nil
 }
 
 func (s *OrderService) existingForKey(userID uuid.UUID, key string) (dto.OrderResponse, bool, error) {

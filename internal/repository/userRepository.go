@@ -109,6 +109,9 @@ type OTPRepository interface {
 	Create(db *gorm.DB, verification *domain.OTPVerification) error
 	IncrementAttempts(db *gorm.DB, id uuid.UUID) error
 	Consume(db *gorm.DB, id uuid.UUID, now time.Time) error
+	// CountDailyByPhone counts OTPs sent to a phone since midnight of the given day
+	// (UTC). Used to enforce the daily per-phone cap (M-005).
+	CountDailyByPhone(db *gorm.DB, phone string, dayStart time.Time) (int64, error)
 }
 
 type otpRepository struct{ db *gorm.DB }
@@ -119,6 +122,13 @@ func (r *otpRepository) CountRecent(db *gorm.DB, phone string, since time.Time) 
 	var count int64
 	err := dbOrDefault(db, r.db).Model(&domain.OTPVerification{}).
 		Where("phone = ? AND created_at >= ?", phone, since).Count(&count).Error
+	return count, err
+}
+
+func (r *otpRepository) CountDailyByPhone(db *gorm.DB, phone string, dayStart time.Time) (int64, error) {
+	var count int64
+	err := dbOrDefault(db, r.db).Model(&domain.OTPVerification{}).
+		Where("phone = ? AND created_at >= ?", phone, dayStart).Count(&count).Error
 	return count, err
 }
 
