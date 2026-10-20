@@ -69,6 +69,14 @@ func LoadSettings() (AppConfig, error) {
 		otpHashSecret = jwtSecret
 	}
 
+	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	isProduction := appEnv == "production"
+	devOTPLog := boolFromEnv("DEV_OTP_LOG", false)
+	if isProduction && devOTPLog {
+		return AppConfig{}, fmt.Errorf("DEV_OTP_LOG must not be enabled when APP_ENV=production: " +
+			"set DEV_OTP_LOG=false in the production environment")
+	}
+
 	cfg := AppConfig{
 		DeliveryFee:           nonNegativeIntFromEnv("DELIVERY_FEE", 2500),
 		HandlingFee:           nonNegativeIntFromEnv("HANDLING_FEE", 400),
@@ -90,7 +98,7 @@ func LoadSettings() (AppConfig, error) {
 		AdminPhone:            os.Getenv("ADMIN_PHONE"),
 		GoogleMapsAPIKey:      envOrDefault("GOOGLE_MAPS_PLATFORM_KEY", os.Getenv("GOOGLE_MAPS_API_KEY")),
 		GoogleMapsBaseURL:     envOrDefault("GOOGLE_MAPS_BASE_URL", "https://maps.googleapis.com"),
-		DevOTPLog:             boolFromEnv("DEV_OTP_LOG", false),
+		DevOTPLog:             devOTPLog,
 		CloudinaryCloudName:   os.Getenv("CLOUDINARY_CLOUD_NAME"),
 		CloudinaryAPIKey:      os.Getenv("CLOUDINARY_API_KEY"),
 		CloudinaryAPISecret:   os.Getenv("CLOUDINARY_API_SECRET"),
