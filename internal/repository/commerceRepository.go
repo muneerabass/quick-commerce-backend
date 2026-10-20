@@ -32,6 +32,8 @@ type CatalogRepository interface {
 	FindInventoryForUpdate(db *gorm.DB, storeID, productID uuid.UUID) (*domain.Inventory, error)
 	UpdateInventory(db *gorm.DB, inventory *domain.Inventory) error
 	UpsertInventory(db *gorm.DB, inventory *domain.Inventory) error
+	StoreNameExists(db *gorm.DB, name string, excludeID *uuid.UUID) (bool, error)
+	ProductNameExistsInStore(db *gorm.DB, storeID uuid.UUID, name string, excludeID *uuid.UUID) (bool, error)
 }
 
 type catalogRepository struct{ db *gorm.DB }
@@ -79,6 +81,24 @@ func (r *catalogRepository) FindStore(db *gorm.DB, id uuid.UUID) (*domain.Store,
 		return nil, ErrNotFound
 	}
 	return &store, err
+}
+
+func (r *catalogRepository) StoreNameExists(db *gorm.DB, name string, excludeID *uuid.UUID) (bool, error) {
+	q := dbOrDefault(db, r.db).Model(&domain.Store{}).Where("lower(name) = lower(?)", name)
+	if excludeID != nil {
+		q = q.Where("id <> ?", *excludeID)
+	}
+	var count int64
+	return count > 0, q.Count(&count).Error
+}
+
+func (r *catalogRepository) ProductNameExistsInStore(db *gorm.DB, storeID uuid.UUID, name string, excludeID *uuid.UUID) (bool, error) {
+	q := dbOrDefault(db, r.db).Model(&domain.Product{}).Where("store_id = ? AND lower(name) = lower(?)", storeID, name)
+	if excludeID != nil {
+		q = q.Where("id <> ?", *excludeID)
+	}
+	var count int64
+	return count > 0, q.Count(&count).Error
 }
 
 func (r *catalogRepository) CreateStore(db *gorm.DB, store *domain.Store) error {

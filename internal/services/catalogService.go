@@ -210,6 +210,11 @@ func (s *AdminService) CreateStore(request dto.StoreRequest) (dto.StoreResponse,
 	if request.IsActive != nil {
 		isActive = *request.IsActive
 	}
+	if exists, err := s.catalog.StoreNameExists(nil, name, nil); err != nil {
+		return dto.StoreResponse{}, err
+	} else if exists {
+		return dto.StoreResponse{}, fmt.Errorf("%w: a store named %q already exists", ErrDuplicateName, name)
+	}
 	store := &domain.Store{ID: uuid.New(), Name: name, Address: address, IsActive: isActive, CreatedAt: time.Now().UTC(), Pincodes: pincodes}
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if err := s.catalog.CreateStore(tx, store); err != nil {
@@ -232,6 +237,11 @@ func (s *AdminService) UpdateStore(id uuid.UUID, request dto.StorePatchRequest) 
 		store.Name, err = requiredText(*request.Name, "name", 150)
 		if err != nil {
 			return dto.StoreResponse{}, err
+		}
+		if exists, err := s.catalog.StoreNameExists(nil, store.Name, &id); err != nil {
+			return dto.StoreResponse{}, err
+		} else if exists {
+			return dto.StoreResponse{}, fmt.Errorf("%w: a store named %q already exists", ErrDuplicateName, store.Name)
 		}
 	}
 	if request.Address != nil {
@@ -304,6 +314,11 @@ func (s *AdminService) CreateProduct(request dto.ProductRequest) (dto.CatalogPro
 	if err != nil {
 		return dto.CatalogProductResponse{}, err
 	}
+	if exists, err := s.catalog.ProductNameExistsInStore(nil, storeID, name, nil); err != nil {
+		return dto.CatalogProductResponse{}, err
+	} else if exists {
+		return dto.CatalogProductResponse{}, fmt.Errorf("%w: a product named %q already exists in this store", ErrDuplicateName, name)
+	}
 	images := normalizeImages(request.Images)
 	cover := coverImage(images, request.ImageURL)
 
@@ -336,6 +351,11 @@ func (s *AdminService) UpdateProduct(id uuid.UUID, request dto.ProductPatchReque
 		product.Name, err = requiredText(*request.Name, "name", 200)
 		if err != nil {
 			return dto.CatalogProductResponse{}, err
+		}
+		if exists, err := s.catalog.ProductNameExistsInStore(nil, product.StoreID, product.Name, &id); err != nil {
+			return dto.CatalogProductResponse{}, err
+		} else if exists {
+			return dto.CatalogProductResponse{}, fmt.Errorf("%w: a product named %q already exists in this store", ErrDuplicateName, product.Name)
 		}
 	}
 	if request.Description != nil {

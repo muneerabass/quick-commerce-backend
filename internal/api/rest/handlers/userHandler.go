@@ -318,6 +318,8 @@ func serviceError(c *fiber.Ctx, err error) error {
 		return writeErrorCode(c, fiber.StatusConflict, "insufficient_stock", err.Error())
 	case errors.Is(err, services.ErrEmptyCart):
 		return writeErrorCode(c, fiber.StatusBadRequest, "empty_cart", err.Error())
+	case errors.Is(err, services.ErrDuplicateName):
+		return writeErrorCode(c, fiber.StatusConflict, "duplicate_name", strings.TrimPrefix(err.Error(), services.ErrDuplicateName.Error()+": "))
 	case errors.Is(err, services.ErrInvalidInput):
 		// "invalid input: " is an internal prefix; clients get just the reason.
 		return writeError(c, fiber.StatusBadRequest, strings.TrimPrefix(err.Error(), services.ErrInvalidInput.Error()+": "))

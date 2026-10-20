@@ -20,6 +20,7 @@ func TestServiceErrorStatusAndCode(t *testing.T) {
 		status int
 		code   string
 	}{
+		{fmt.Errorf("%w: a store named %q already exists", services.ErrDuplicateName, "Fresh Mart"), 409, "duplicate_name"},
 		{fmt.Errorf("%w: pincode is required", services.ErrInvalidInput), 400, "invalid_input"},
 		{repository.ErrNotFound, 404, "not_found"},
 		{services.ErrNotServiceable, 422, "not_serviceable"},

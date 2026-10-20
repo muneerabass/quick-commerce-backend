@@ -35,6 +35,7 @@ var (
 	ErrSessionRevoked      = errors.New("session is revoked or expired")
 	ErrAccountDeleted      = errors.New("account is deleted")
 	ErrInvalidInput        = errors.New("invalid input")
+	ErrDuplicateName       = errors.New("name already exists")
 )
 
 var otpPattern = regexp.MustCompile(`^[0-9]{6}$`)
@@ -58,10 +59,16 @@ func (DevStdoutOTPSender) Send(_ context.Context, phone, otp string) error {
 }
 
 // ipBucket is an in-process per-IP OTP send counter for a single sliding window.
-// NOTE (M-005): these counters are per-instance. A deployment with multiple
-// replicas or horizontal scaling will not aggregate counts across instances.
-// For global enforcement, consider a shared Redis counter. The per-phone daily
-// cap uses the database and IS globally enforced.
+//
+// M-005 / M-008 — per-process limitation: the counter lives in memory inside a
+// single Go process. When the service runs as multiple replicas, each instance
+// maintains its own independent counter. A client can therefore send up to
+// otpHourlyIPLimit × N OTPs per hour across N replicas before being throttled.
+// The per-phone-per-day cap (stored in the database) IS globally enforced and
+// is the primary abuse barrier; this per-IP counter is a secondary, best-effort
+// defence. To enforce the per-IP limit globally, replace this with a shared
+// counter (e.g. Redis INCR + EXPIRE). Until then, keep otpHourlyIPLimit low
+// relative to the abuse threshold you want to prevent.
 type ipBucket struct {
 	mu    sync.Mutex
 	count int
