@@ -1,4 +1,11 @@
 steps:
+  # Authenticate Docker to Artifact Registry
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - auth
+      - configure-docker
+      - '${_REGION}-docker.pkg.dev'
+
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
     args:
@@ -9,12 +16,17 @@ steps:
       - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest'
       - .
 
-  # Push both tags
+  # Push SHA tag
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - push
-      - '--all-tags'
-      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+
+  # Push latest tag
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - push
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest'
 
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -53,4 +65,4 @@ substitutions:
   _SA_EMAIL: 'quick-commerce-run@project-5dababb2-6d66-4348-a84.iam.gserviceaccount.com'
 
 options:
-  logging: CLOUD_LOGGING_ONLY
+  logging: LEGACY
