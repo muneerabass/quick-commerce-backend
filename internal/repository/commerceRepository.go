@@ -274,6 +274,7 @@ type CommerceRepository interface {
 	CompleteOrder(db *gorm.DB, orderID, deliveryID uuid.UUID, now time.Time) error
 	CreateAssignment(db *gorm.DB, assignment *domain.DeliveryStoreAssignment) error
 	DeleteAssignment(db *gorm.DB, deliveryID, storeID uuid.UUID) error
+	DeleteAllAssignmentsForDelivery(db *gorm.DB, deliveryID uuid.UUID) error
 	IsAssigned(db *gorm.DB, deliveryID, storeID uuid.UUID) (bool, error)
 
 	// Order lifecycle (orderRepository.go).
@@ -493,6 +494,10 @@ func (r *commerceRepository) DeleteAssignment(db *gorm.DB, deliveryID, storeID u
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *commerceRepository) DeleteAllAssignmentsForDelivery(db *gorm.DB, deliveryID uuid.UUID) error {
+	return dbOrDefault(db, r.db).Where("delivery_id = ?", deliveryID).Delete(&domain.DeliveryStoreAssignment{}).Error
 }
 
 func (r *commerceRepository) IsAssigned(db *gorm.DB, deliveryID, storeID uuid.UUID) (bool, error) {

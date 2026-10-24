@@ -7,14 +7,17 @@ import (
 )
 
 type User struct {
-	ID              uuid.UUID  `json:"id" gorm:"type:uuid;primaryKey"`
-	Phone           string     `json:"phone"`
-	Name            *string    `json:"name,omitempty"`
-	PhoneVerifiedAt *time.Time `json:"phone_verified_at,omitempty"`
-	Status          string     `json:"status"`
-	Role            string     `json:"role"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID                uuid.UUID  `json:"id" gorm:"type:uuid;primaryKey"`
+	Phone             string     `json:"phone"`
+	Name              *string    `json:"name,omitempty"`
+	PhoneVerifiedAt   *time.Time `json:"phone_verified_at,omitempty"`
+	Status            string     `json:"status"`
+	Role              string     `json:"role"`
+	ReferralCode      string     `json:"referral_code"`
+	ReferredByCode    *string    `json:"referred_by_code,omitempty"`
+	ReferredByUserID  *uuid.UUID `json:"referred_by_user_id,omitempty" gorm:"type:uuid"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 type OTPVerification struct {

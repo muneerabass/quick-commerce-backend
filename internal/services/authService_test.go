@@ -54,7 +54,7 @@ func TestAuthServiceOTPFirstLoginAndReusePrevention(t *testing.T) {
 	if len(sender.otp) != 6 {
 		t.Fatalf("expected six-digit OTP, got %q", sender.otp)
 	}
-	response, err := auth.VerifyOTP(context.Background(), phone, sender.otp)
+	response, err := auth.VerifyOTP(context.Background(), phone, sender.otp, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,14 +65,14 @@ func TestAuthServiceOTPFirstLoginAndReusePrevention(t *testing.T) {
 	if err := db.Model(&domain.User{}).Count(&count).Error; err != nil || count != 1 {
 		t.Fatalf("expected one created user, count=%d, err=%v", count, err)
 	}
-	if _, err := auth.VerifyOTP(context.Background(), phone, sender.otp); !errors.Is(err, ErrInvalidOTP) {
+	if _, err := auth.VerifyOTP(context.Background(), phone, sender.otp, nil); !errors.Is(err, ErrInvalidOTP) {
 		t.Fatalf("expected consumed OTP to be rejected, got %v", err)
 	}
 
 	if err := auth.SendOTP(context.Background(), phone, ""); err != nil {
 		t.Fatal(err)
 	}
-	second, err := auth.VerifyOTP(context.Background(), phone, sender.otp)
+	second, err := auth.VerifyOTP(context.Background(), phone, sender.otp, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestAuthServiceOTPExpiryAndAttemptLimit(t *testing.T) {
 	if err := auth.SendOTP(context.Background(), "+919876543211", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := auth.VerifyOTP(context.Background(), "+919876543211", sender.otp); !errors.Is(err, ErrOTPExpired) {
+	if _, err := auth.VerifyOTP(context.Background(), "+919876543211", sender.otp, nil); !errors.Is(err, ErrOTPExpired) {
 		t.Fatalf("expected expiry error, got %v", err)
 	}
 
@@ -109,11 +109,11 @@ func TestAuthServiceOTPExpiryAndAttemptLimit(t *testing.T) {
 		wrongOTP = "111111"
 	}
 	for i := 0; i < 2; i++ {
-		if _, err := auth2.VerifyOTP(context.Background(), phone, wrongOTP); !errors.Is(err, ErrInvalidOTP) {
+		if _, err := auth2.VerifyOTP(context.Background(), phone, wrongOTP, nil); !errors.Is(err, ErrInvalidOTP) {
 			t.Fatalf("wrong attempt %d: expected invalid OTP, got %v", i+1, err)
 		}
 	}
-	if _, err := auth2.VerifyOTP(context.Background(), phone, sender2.otp); !errors.Is(err, ErrOTPAttemptsExceeded) {
+	if _, err := auth2.VerifyOTP(context.Background(), phone, sender2.otp, nil); !errors.Is(err, ErrOTPAttemptsExceeded) {
 		t.Fatalf("expected attempt limit error, got %v", err)
 	}
 }
@@ -126,7 +126,7 @@ func TestAuthServiceRefreshRotationAndRevocation(t *testing.T) {
 	if err := auth.SendOTP(context.Background(), phone, ""); err != nil {
 		t.Fatal(err)
 	}
-	first, err := auth.VerifyOTP(context.Background(), phone, sender.otp)
+	first, err := auth.VerifyOTP(context.Background(), phone, sender.otp, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

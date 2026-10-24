@@ -7,6 +7,8 @@ type UserResponseDto struct {
 	PhoneVerifiedAt *string `json:"phone_verified_at,omitempty"`
 	Status          string  `json:"status"`
 	Role            string  `json:"role"`
+	ReferralCode    string  `json:"referral_code"`
+	ReferredByCode  *string `json:"referred_by_code,omitempty"`
 }
 
 type AuthResponse struct {

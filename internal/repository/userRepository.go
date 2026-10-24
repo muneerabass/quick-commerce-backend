@@ -15,6 +15,7 @@ var ErrNotFound = gorm.ErrRecordNotFound
 type UserRepository interface {
 	FindByID(db *gorm.DB, id uuid.UUID) (*domain.User, error)
 	FindByPhone(db *gorm.DB, phone string) (*domain.User, error)
+	FindByReferralCode(db *gorm.DB, code string) (*domain.User, error)
 	Create(db *gorm.DB, user *domain.User) error
 	Update(db *gorm.DB, user *domain.User) error
 	Anonymize(db *gorm.DB, id uuid.UUID) error
@@ -37,6 +38,15 @@ func (r *userRepository) FindByID(db *gorm.DB, id uuid.UUID) (*domain.User, erro
 func (r *userRepository) FindByPhone(db *gorm.DB, phone string) (*domain.User, error) {
 	var user domain.User
 	err := dbOrDefault(db, r.db).Where("phone = ? AND status <> ?", phone, "deleted").First(&user).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &user, err
+}
+
+func (r *userRepository) FindByReferralCode(db *gorm.DB, code string) (*domain.User, error) {
+	var user domain.User
+	err := dbOrDefault(db, r.db).Where("referral_code = ? AND status <> ?", code, "deleted").First(&user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}

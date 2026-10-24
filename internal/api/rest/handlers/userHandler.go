@@ -46,6 +46,7 @@ func SetupUserRoutes(rh *rest.RestHandler, cfg configs.AppConfig) {
 	h := UserHandler{auth: auth, address: addressService}
 
 	api := rh.App.Group("/api/v1")
+	api.Get("/referral/validate", h.ValidateReferralCode)
 	authRoutes := api.Group("/auth")
 	authRoutes.Post("/send-otp", h.SendOTP)
 	authRoutes.Post("/verify-otp", h.VerifyOTP)
@@ -93,11 +94,23 @@ func (h *UserHandler) VerifyOTP(c *fiber.Ctx) error {
 	if err := c.BodyParser(&request); err != nil {
 		return writeError(c, fiber.StatusBadRequest, "invalid request body")
 	}
-	response, err := h.auth.VerifyOTP(context.Background(), request.Phone, request.OTP)
+	response, err := h.auth.VerifyOTP(context.Background(), request.Phone, request.OTP, request.ReferralCode)
 	if err != nil {
 		return serviceError(c, err)
 	}
 	return c.JSON(response)
+}
+
+func (h *UserHandler) ValidateReferralCode(c *fiber.Ctx) error {
+	code := strings.TrimSpace(c.Query("code"))
+	if code == "" {
+		return writeError(c, fiber.StatusBadRequest, "code query parameter is required")
+	}
+	user, err := h.auth.LookupReferralCode(context.Background(), code)
+	if err != nil {
+		return serviceError(c, err)
+	}
+	return c.JSON(fiber.Map{"referrer_name": user.Name})
 }
 
 func (h *UserHandler) Refresh(c *fiber.Ctx) error {
@@ -323,6 +336,10 @@ func serviceError(c *fiber.Ctx, err error) error {
 	case errors.Is(err, services.ErrInvalidInput):
 		// "invalid input: " is an internal prefix; clients get just the reason.
 		return writeError(c, fiber.StatusBadRequest, strings.TrimPrefix(err.Error(), services.ErrInvalidInput.Error()+": "))
+	case errors.Is(err, services.ErrReferralCodeNotFound):
+		return writeErrorCode(c, fiber.StatusNotFound, "referral_code_not_found", err.Error())
+	case errors.Is(err, services.ErrSelfReferral):
+		return writeErrorCode(c, fiber.StatusBadRequest, "self_referral_not_allowed", err.Error())
 	case errors.Is(err, services.ErrInvalidPhone), errors.Is(err, services.ErrInvalidOTP), errors.Is(err, services.ErrOTPExpired), errors.Is(err, services.ErrOTPAttemptsExceeded), errors.Is(err, services.ErrInvalidRefreshToken), errors.Is(err, services.ErrSessionRevoked), errors.Is(err, services.ErrInvalidRole):
 		return writeError(c, fiber.StatusBadRequest, err.Error())
 	case errors.Is(err, repository.ErrOrderUnavailable), errors.Is(err, repository.ErrRiderBusy), errors.Is(err, gorm.ErrDuplicatedKey):

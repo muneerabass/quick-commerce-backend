@@ -121,10 +121,11 @@ type AdminService struct {
 	users    repository.UserRepository
 	catalog  repository.CatalogRepository
 	commerce repository.CommerceRepository
+	sessions repository.SessionRepository
 }
 
-func NewAdminService(db *gorm.DB, users repository.UserRepository, catalog repository.CatalogRepository, commerce repository.CommerceRepository) *AdminService {
-	return &AdminService{db: db, users: users, catalog: catalog, commerce: commerce}
+func NewAdminService(db *gorm.DB, users repository.UserRepository, catalog repository.CatalogRepository, commerce repository.CommerceRepository, sessions repository.SessionRepository) *AdminService {
+	return &AdminService{db: db, users: users, catalog: catalog, commerce: commerce, sessions: sessions}
 }
 
 func (s *AdminService) ListStores() ([]dto.StoreResponse, error) {
@@ -546,6 +547,39 @@ func (s *AdminService) RemoveDeliveryAssignment(deliveryID, storeID uuid.UUID) e
 		return ErrActiveOrders
 	}
 	return s.commerce.DeleteAssignment(nil, deliveryID, storeID)
+}
+
+// DeleteDeliveryUser demotes a delivery user back to a customer: unassigns them
+// from every store, flips users.role to "customer", and revokes every session
+// so the rider app on the next request gets a 401 → auto-signout.
+// Refuses when the rider still holds an active order anywhere.
+func (s *AdminService) DeleteDeliveryUser(deliveryID uuid.UUID) error {
+	user, err := s.users.FindByID(nil, deliveryID)
+	if err != nil {
+		return err
+	}
+	if user.Role != "delivery" {
+		return fmt.Errorf("%w: user is not a delivery user", ErrInvalidRole)
+	}
+	active, err := s.commerce.CountActiveOrdersForRider(nil, deliveryID, nil)
+	if err != nil {
+		return err
+	}
+	if active > 0 {
+		return ErrActiveOrders
+	}
+	now := time.Now().UTC()
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := s.commerce.DeleteAllAssignmentsForDelivery(tx, deliveryID); err != nil {
+			return err
+		}
+		user.Role = "customer"
+		user.UpdatedAt = now
+		if err := s.users.Update(tx, user); err != nil {
+			return err
+		}
+		return s.sessions.RevokeAll(tx, deliveryID, now)
+	})
 }
 
 func mapStore(store *domain.Store) dto.StoreResponse {

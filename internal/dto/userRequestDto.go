@@ -9,8 +9,9 @@ type SendOTPRequest struct {
 }
 
 type VerifyOTPRequest struct {
-	Phone string `json:"phone"`
-	OTP   string `json:"otp"`
+	Phone        string  `json:"phone"`
+	OTP          string  `json:"otp"`
+	ReferralCode *string `json:"referral_code,omitempty"`
 }
 
 type RefreshTokenRequest struct {

@@ -24,7 +24,7 @@ type CatalogHandler struct {
 func SetupCatalogRoutes(rh *rest.RestHandler, auth *services.AuthService, deliveryCodeSecret string) {
 	catalogRepository := repository.NewCatalogRepository(rh.Db)
 	commerceRepository := repository.NewCommerceRepository(rh.Db)
-	admin := services.NewAdminService(rh.Db, repository.NewUserRepository(rh.Db), catalogRepository, commerceRepository)
+	admin := services.NewAdminService(rh.Db, repository.NewUserRepository(rh.Db), catalogRepository, commerceRepository, repository.NewSessionRepository(rh.Db))
 	orders := services.NewOrderService(rh.Db, repository.NewAddressRepository(rh.Db), catalogRepository, commerceRepository).WithDeliveryCodeSecret(deliveryCodeSecret)
 	h := &CatalogHandler{catalog: services.NewCatalogService(catalogRepository), admin: admin, orders: orders}
 
@@ -50,6 +50,7 @@ func SetupCatalogRoutes(rh *rest.RestHandler, auth *services.AuthService, delive
 	adminRoutes.Get("/stores/:storeID/delivery-users", h.ListDeliveryUsers)
 	adminRoutes.Put("/delivery-users/:deliveryID/stores/:storeID", h.AssignDeliveryUser)
 	adminRoutes.Delete("/delivery-users/:deliveryID/stores/:storeID", h.RemoveDeliveryAssignment)
+	adminRoutes.Delete("/delivery-users/:deliveryID", h.DeleteDeliveryUser)
 }
 
 func (h *CatalogHandler) ListStores(c *fiber.Ctx) error {
@@ -230,6 +231,17 @@ func (h *CatalogHandler) AssignDeliveryUser(c *fiber.Ctx) error {
 		return serviceError(c, err)
 	}
 	if err := h.admin.AssignDeliveryUser(deliveryID, storeID); err != nil {
+		return serviceError(c, err)
+	}
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
+func (h *CatalogHandler) DeleteDeliveryUser(c *fiber.Ctx) error {
+	deliveryID, err := parseParamUUID(c, "deliveryID")
+	if err != nil {
+		return serviceError(c, err)
+	}
+	if err := h.admin.DeleteDeliveryUser(deliveryID); err != nil {
 		return serviceError(c, err)
 	}
 	return c.SendStatus(fiber.StatusNoContent)

@@ -25,20 +25,40 @@ import (
 )
 
 var (
-	ErrInvalidOTP          = errors.New("invalid OTP")
-	ErrOTPExpired          = errors.New("OTP has expired")
-	ErrOTPAttemptsExceeded = errors.New("OTP attempt limit exceeded")
-	ErrOTPTooSoon          = errors.New("OTP was sent recently")
-	ErrOTPRateLimited      = errors.New("OTP send rate limit exceeded")
-	ErrOTPProvider         = errors.New("OTP provider is not configured")
-	ErrInvalidRefreshToken = errors.New("invalid refresh token")
-	ErrSessionRevoked      = errors.New("session is revoked or expired")
-	ErrAccountDeleted      = errors.New("account is deleted")
-	ErrInvalidInput        = errors.New("invalid input")
-	ErrDuplicateName       = errors.New("name already exists")
+	ErrInvalidOTP           = errors.New("invalid OTP")
+	ErrOTPExpired           = errors.New("OTP has expired")
+	ErrOTPAttemptsExceeded  = errors.New("OTP attempt limit exceeded")
+	ErrOTPTooSoon           = errors.New("OTP was sent recently")
+	ErrOTPRateLimited       = errors.New("OTP send rate limit exceeded")
+	ErrOTPProvider          = errors.New("OTP provider is not configured")
+	ErrInvalidRefreshToken  = errors.New("invalid refresh token")
+	ErrSessionRevoked       = errors.New("session is revoked or expired")
+	ErrAccountDeleted       = errors.New("account is deleted")
+	ErrInvalidInput         = errors.New("invalid input")
+	ErrDuplicateName        = errors.New("name already exists")
+	ErrReferralCodeNotFound = errors.New("referral code not found")
+	ErrSelfReferral         = errors.New("cannot use your own referral code")
 )
 
 var otpPattern = regexp.MustCompile(`^[0-9]{6}$`)
+
+const referralAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+const referralCodeLen = 8
+
+var referralCodePattern = regexp.MustCompile(`^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$`)
+
+func generateReferralCode() (string, error) {
+	b := make([]byte, referralCodeLen)
+	alphabetLen := big.NewInt(int64(len(referralAlphabet)))
+	for i := range b {
+		n, err := rand.Int(rand.Reader, alphabetLen)
+		if err != nil {
+			return "", err
+		}
+		b[i] = referralAlphabet[n.Int64()]
+	}
+	return string(b), nil
+}
 
 type OTPSender interface {
 	Send(ctx context.Context, phone, otp string) error
@@ -238,7 +258,7 @@ func (s *AuthService) SendOTP(ctx context.Context, rawPhone, clientIP string) er
 	})
 }
 
-func (s *AuthService) VerifyOTP(ctx context.Context, rawPhone, otp string) (dto.AuthResponse, error) {
+func (s *AuthService) VerifyOTP(ctx context.Context, rawPhone, otp string, referralCode *string) (dto.AuthResponse, error) {
 	phone, err := NormalizePhone(rawPhone)
 	if err != nil {
 		return dto.AuthResponse{}, err
@@ -290,7 +310,26 @@ func (s *AuthService) VerifyOTP(ctx context.Context, rawPhone, otp string) (dto.
 			if phone == s.adminPhone {
 				role = "admin"
 			}
-			user = &domain.User{ID: uuid.New(), Phone: phone, Role: role, Status: "active", PhoneVerifiedAt: &now, CreatedAt: now, UpdatedAt: now}
+			code, err := generateReferralCode()
+			if err != nil {
+				return err
+			}
+			user = &domain.User{ID: uuid.New(), Phone: phone, Role: role, Status: "active", PhoneVerifiedAt: &now, ReferralCode: code, CreatedAt: now, UpdatedAt: now}
+			if referralCode != nil {
+				cleaned := strings.ToUpper(strings.TrimSpace(*referralCode))
+				if !referralCodePattern.MatchString(cleaned) {
+					return fmt.Errorf("%w: referral code must be 8 uppercase alphanumeric characters", ErrInvalidInput)
+				}
+				referrer, err := s.users.FindByReferralCode(tx, cleaned)
+				if errors.Is(err, repository.ErrNotFound) {
+					return ErrReferralCodeNotFound
+				}
+				if err != nil {
+					return err
+				}
+				user.ReferredByCode = &cleaned
+				user.ReferredByUserID = &referrer.ID
+			}
 			if err := s.users.Create(tx, user); err != nil {
 				return err
 			}
@@ -419,6 +458,18 @@ func (s *AuthService) UpdateProfile(userID uuid.UUID, name *string) (dto.UserRes
 	return userResponse(user), nil
 }
 
+func (s *AuthService) LookupReferralCode(ctx context.Context, code string) (*domain.User, error) {
+	cleaned := strings.ToUpper(strings.TrimSpace(code))
+	if !referralCodePattern.MatchString(cleaned) {
+		return nil, ErrReferralCodeNotFound
+	}
+	user, err := s.users.FindByReferralCode(nil, cleaned)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrReferralCodeNotFound
+	}
+	return user, err
+}
+
 func (s *AuthService) DeleteAccount(userID uuid.UUID) error {
 	// M-002: the open-order check and the anonymize must happen in the same
 	// transaction so a new order cannot slip in between the two operations.
@@ -464,7 +515,11 @@ func randomToken(size int) (string, error) {
 }
 
 func userResponse(user *domain.User) dto.UserResponseDto {
-	response := dto.UserResponseDto{ID: user.ID.String(), Phone: user.Phone, Name: user.Name, Status: user.Status, Role: user.Role}
+	response := dto.UserResponseDto{
+		ID: user.ID.String(), Phone: user.Phone, Name: user.Name,
+		Status: user.Status, Role: user.Role,
+		ReferralCode: user.ReferralCode, ReferredByCode: user.ReferredByCode,
+	}
 	if user.PhoneVerifiedAt != nil {
 		value := user.PhoneVerifiedAt.UTC().Format(time.RFC3339)
 		response.PhoneVerifiedAt = &value
